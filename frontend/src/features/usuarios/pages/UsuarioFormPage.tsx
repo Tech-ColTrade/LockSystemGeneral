@@ -1,0 +1,283 @@
+import { useEffect, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { CircleAlert, Loader2 } from 'lucide-react'
+import { usuariosApi } from '@/features/usuarios/api/usuarios.api'
+import { ROLE_LABELS } from '@/features/auth/permissions'
+import { usePermissions } from '@/features/auth/usePermissions'
+import type { Role } from '@/features/auth/types'
+import { ApiError } from '@/lib/http/errors'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
+
+const ROLES: Role[] = ['admin', 'operador', 'consulta']
+
+/** Descripción corta de cada rol (ayuda contextual en el formulario). */
+const ROLE_HINT: Record<Role, string> = {
+  admin: 'Todos los módulos + gestión de usuarios y parametrizaciones.',
+  operador:
+    'Habilitaciones, inhabilitaciones, enrolamiento/desenrolamiento, pines y reportes.',
+  consulta: 'Solo lectura: validar estado del dispositivo y consultar pines.',
+}
+
+/** Extrae errores por campo y un mensaje general de un ApiError de DRF. */
+function parseErrors(err: unknown): {
+  fields: Record<string, string>
+  general: string | null
+} {
+  if (err instanceof ApiError && err.data && typeof err.data === 'object') {
+    const data = err.data as Record<string, unknown>
+    const fields: Record<string, string> = {}
+    let general: string | null = null
+    for (const [key, val] of Object.entries(data)) {
+      const msg = Array.isArray(val) ? String(val[0]) : String(val)
+      if (key === 'detail' || key === 'non_field_errors') general = msg
+      else fields[key] = msg
+    }
+    return { fields, general }
+  }
+  return { fields: {}, general: (err as Error)?.message ?? 'Error inesperado.' }
+}
+
+function FieldError({ msg }: { msg?: string }) {
+  if (!msg) return null
+  return <p className="text-xs text-destructive">{msg}</p>
+}
+
+export function UsuarioFormPage() {
+  const { id } = useParams()
+  const isEdit = Boolean(id)
+  const navigate = useNavigate()
+  const { user: current } = usePermissions()
+
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [role, setRole] = useState<Role>('consulta')
+  const [isActive, setIsActive] = useState(true)
+
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const [general, setGeneral] = useState<string | null>(null)
+  const [loading, setLoading] = useState(isEdit)
+  const [saving, setSaving] = useState(false)
+
+  const isSelf = isEdit && current?.id === id
+
+  useEffect(() => {
+    if (!isEdit) return
+    let active = true
+    usuariosApi
+      .get(id!)
+      .then((u) => {
+        if (!active) return
+        setEmail(u.email)
+        setFirstName(u.first_name)
+        setLastName(u.last_name)
+        setRole(u.role)
+        setIsActive(u.is_active)
+      })
+      .catch((e) => active && setGeneral((e as Error).message))
+      .finally(() => active && setLoading(false))
+    return () => {
+      active = false
+    }
+  }, [id, isEdit])
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setSaving(true)
+    setFieldErrors({})
+    setGeneral(null)
+    try {
+      if (isEdit) {
+        await usuariosApi.update(id!, {
+          first_name: firstName,
+          last_name: lastName,
+          role,
+          is_active: isActive,
+        })
+      } else {
+        await usuariosApi.create({
+          email,
+          password,
+          first_name: firstName,
+          last_name: lastName,
+          role,
+        })
+      }
+      navigate('/usuarios')
+    } catch (err) {
+      const { fields, general: g } = parseErrors(err)
+      setFieldErrors(fields)
+      setGeneral(g)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-xl">
+        <Card>
+          <CardContent className="space-y-4 py-6">
+            <Skeleton className="h-6 w-40" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-auto max-w-xl">
+      <Card>
+        <CardHeader className="border-b pb-4">
+          <CardTitle>{isEdit ? 'Editar usuario' : 'Nuevo usuario'}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onSubmit} noValidate className="space-y-5">
+            {general && (
+              <Alert variant="destructive">
+                <CircleAlert />
+                <AlertTitle>No se pudo guardar</AlertTitle>
+                <AlertDescription>{general}</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="grid gap-2">
+              <Label htmlFor="email">Correo electrónico</Label>
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="usuario@claro.com"
+                autoFocus={!isEdit}
+                required={!isEdit}
+                disabled={isEdit}
+              />
+              {isEdit && (
+                <p className="text-xs text-muted-foreground">
+                  El correo no se puede cambiar.
+                </p>
+              )}
+              <FieldError msg={fieldErrors.email} />
+            </div>
+
+            {!isEdit && (
+              <div className="grid gap-2">
+                <Label htmlFor="password">Contraseña</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Mínimo 10 caracteres"
+                  autoComplete="new-password"
+                  required
+                />
+                <FieldError msg={fieldErrors.password} />
+              </div>
+            )}
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="first_name">Nombres</Label>
+                <Input
+                  id="first_name"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                />
+                <FieldError msg={fieldErrors.first_name} />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="last_name">Apellidos</Label>
+                <Input
+                  id="last_name"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                />
+                <FieldError msg={fieldErrors.last_name} />
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="role">Rol</Label>
+              <Select
+                value={role}
+                onValueChange={(v) => setRole(v as Role)}
+                disabled={isSelf}
+              >
+                <SelectTrigger id="role" className="w-full">
+                  <SelectValue>{(v: string) => ROLE_LABELS[v as Role]}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {ROLES.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {ROLE_LABELS[r]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{ROLE_HINT[role]}</p>
+              {isSelf && (
+                <p className="text-xs text-muted-foreground">
+                  No puedes cambiar tu propio rol.
+                </p>
+              )}
+              <FieldError msg={fieldErrors.role} />
+            </div>
+
+            {isEdit && (
+              <div className="grid gap-2">
+                <div className="flex items-center gap-2.5">
+                  <Switch
+                    id="is_active"
+                    checked={isActive}
+                    onCheckedChange={setIsActive}
+                    disabled={isSelf}
+                  />
+                  <Label htmlFor="is_active">Cuenta activa</Label>
+                </div>
+                {isSelf && (
+                  <p className="text-xs text-muted-foreground">
+                    No puedes desactivar tu propia cuenta.
+                  </p>
+                )}
+                <FieldError msg={fieldErrors.is_active} />
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <Button type="submit" disabled={saving}>
+                {saving && <Loader2 className="animate-spin" />}
+                {saving ? 'Guardando…' : 'Guardar'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => navigate('/usuarios')}
+              >
+                Cancelar
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}

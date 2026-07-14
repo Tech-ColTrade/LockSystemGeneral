@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from openpyxl import Workbook
 
+from empresas.scoping import acotar
 from televisores.models import BulkSyncJob
 
 from .exports import _estilar_encabezado, _respuesta_xlsx
@@ -168,12 +169,15 @@ def exportar_actividad_equipo(f: Filtros | None = None):
 # ---------------------------------------------------------------------------
 # 6. Usuarios registrados en la plataforma y su estado
 # ---------------------------------------------------------------------------
-def exportar_usuarios():
+def exportar_usuarios(f: Filtros | None = None):
+    f = f or Filtros()
     wb, ws = _hoja(
         'Usuarios',
         ['Correo', 'Nombres', 'Apellidos', 'Estado', 'Es staff', 'Fecha de registro'],
     )
-    for u in User.objects.all():
+    # Solo los usuarios de la empresa: este Excel es una lista de correos, y es
+    # de las cosas que menos deben cruzar de una empresa a otra.
+    for u in acotar(User.objects.all(), f.user):
         ws.append([
             u.email,
             u.first_name,
@@ -211,7 +215,12 @@ def exportar_acciones_usuario(f: Filtros | None = None):
     # Un lote masivo no es de un solo equipo: solo tiene sentido incluirlo cuando
     # no se filtra por serial ni por estado. La fecha sí se respeta.
     if not f.serial and not f.estado:
-        jobs = BulkSyncJob.objects.select_related('usuario').filter(modo=BulkSyncJob.SYNC)
+        jobs = acotar(
+            BulkSyncJob.objects.select_related('usuario').filter(
+                modo=BulkSyncJob.SYNC
+            ),
+            f.user,
+        )
         if f.desde:
             jobs = jobs.filter(creado__date__gte=f.desde)
         if f.hasta:

@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
+  Building2,
   ChevronsUpDown,
   KeyRound,
   LayoutDashboard,
@@ -41,6 +42,8 @@ interface NavItem {
   icon: ComponentType<{ className?: string }>
   /** Si es true, solo lo ve el Administrador. */
   adminOnly?: boolean
+  /** Si es true, solo lo ve el Administrador general (super admin). */
+  superAdminOnly?: boolean
 }
 
 const navItems: NavItem[] = [
@@ -49,6 +52,7 @@ const navItems: NavItem[] = [
   { to: '/sincronizaciones', label: 'Sincronizaciones', icon: RefreshCw },
   { to: '/pincodes', label: 'Códigos Pin', icon: KeyRound },
   { to: '/usuarios', label: 'Usuarios', icon: Users, adminOnly: true },
+  { to: '/empresas', label: 'Empresas', icon: Building2, superAdminOnly: true },
 ]
 
 // Logo de marca.
@@ -62,13 +66,16 @@ function BrandLogo({ className }: { className?: string }) {
 
 export function AppSidebar() {
   const { user, logout } = useAuth()
-  const { isAdmin } = usePermissions()
+  const { isAdmin, isSuperAdmin } = usePermissions()
   const { isMobile } = useSidebar()
   const { pathname } = useLocation()
 
   const nombre = user?.full_name?.trim() || user?.first_name || user?.email || ''
   const inicial = (nombre[0] ?? '?').toUpperCase()
-  const items = navItems.filter((item) => !item.adminOnly || isAdmin)
+  const items = navItems.filter(
+    (item) =>
+      (!item.adminOnly || isAdmin) && (!item.superAdminOnly || isSuperAdmin),
+  )
   const isActive = (to: string) =>
     to === '/' ? pathname === '/' : pathname.startsWith(to)
 

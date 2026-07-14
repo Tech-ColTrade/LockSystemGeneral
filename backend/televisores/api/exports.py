@@ -11,6 +11,7 @@ from django.utils import timezone
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
+from empresas.scoping import acotar
 from televisores.models import BulkSyncItem, BulkSyncJob, PinCodeUsado, SyncJob
 
 from .filtros import filtrar_por_fecha, filtrar_sincronizaciones
@@ -62,12 +63,14 @@ def exportar_sincronizaciones(
     desde: str | None = None,
     hasta: str | None = None,
     televisor=None,
+    user=None,
 ) -> HttpResponse:
     """Historial de cambios de estado (individuales + masivos), acotado al rango.
 
     Mismas filas que muestra /sincronizaciones: el filtro de la tabla y el del
     Excel salen de la misma función. Con `televisor` se limita a ese equipo,
-    que es lo que exporta /televisores/<id>/sincronizaciones.
+    que es lo que exporta /televisores/<id>/sincronizaciones; con `user`, a la
+    empresa de ese usuario (un Excel es tan filtrable como la tabla).
     """
     wb = Workbook()
     ws = wb.active
@@ -82,6 +85,9 @@ def exportar_sincronizaciones(
     # Solo los lotes de sincronización: los de validación masiva no son cambios
     # de estado, y la tabla de /sincronizaciones tampoco los muestra.
     items = BulkSyncItem.objects.filter(job__modo=BulkSyncJob.SYNC)
+    if user is not None:
+        syncs = acotar(syncs, user)
+        items = acotar(items, user, campo='job__empresa')
     if televisor is not None:
         syncs = syncs.filter(televisor=televisor)
         items = items.filter(televisor=televisor)
@@ -227,6 +233,7 @@ def exportar_pincodes(
     desde: str | None = None,
     hasta: str | None = None,
     televisor=None,
+    user=None,
 ) -> HttpResponse:
     """Bitácora de Códigos Pin usados, acotada al mismo rango que ve el usuario.
 
@@ -244,6 +251,8 @@ def exportar_pincodes(
     _estilar_encabezado(ws)
 
     qs = PinCodeUsado.objects.all()
+    if user is not None:
+        qs = acotar(qs, user)
     if televisor is not None:
         qs = qs.filter(televisor=televisor)
 

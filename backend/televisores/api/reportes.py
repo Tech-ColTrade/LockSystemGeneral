@@ -17,6 +17,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from empresas.scoping import acotar
 from televisores.models import BulkSyncItem, BulkSyncJob, PinCodeUsado, SyncJob, Televisor
 
 User = get_user_model()
@@ -34,21 +35,31 @@ def _parse_fecha(valor: str):
 @dataclass
 class Filtros:
     """Filtros globales del dashboard, compartidos por el resumen y todas las
-    exportaciones: rango de fechas, estado actual del televisor y serial."""
+    exportaciones: rango de fechas, estado actual del televisor y serial.
+
+    `user` no es un filtro que elija el usuario: es QUIÉN consulta, y acota todo
+    a su empresa. Va aquí porque este objeto es el único que atraviesan tanto el
+    resumen como los nueve exports; añadirlo en un solo sitio los cubre todos.
+    Sin `user` (None) los querysets salen vacíos, no completos: si algún día se
+    construye un Filtros a mano y se olvida el usuario, el fallo es no ver datos,
+    nunca ver los de otra empresa.
+    """
 
     desde: datetime.date | None = None
     hasta: datetime.date | None = None
     estado: str = ''  # '', 'habilitado' o 'inhabilitado'
     serial: str = ''
+    user: object = None
 
     @classmethod
-    def from_request(cls, params) -> 'Filtros':
+    def from_request(cls, params, user=None) -> 'Filtros':
         estado = params.get('estado', '')
         return cls(
             desde=_parse_fecha(params.get('desde', '')),
             hasta=_parse_fecha(params.get('hasta', '')),
             estado=estado if estado in ESTADOS_FILTRO else '',
             serial=(params.get('serial') or '').strip(),
+            user=user,
         )
 
     @property
@@ -60,7 +71,7 @@ def televisores_filtrados(f: Filtros | None = None):
     """Televisores acotados por serial y estado actual (no por fecha: el estado
     es el vigente, no tiene una fecha de corte)."""
     f = f or Filtros()
-    qs = Televisor.objects.all()
+    qs = acotar(Televisor.objects.all(), f.user)
     if f.serial:
         qs = qs.filter(serial_number__icontains=f.serial)
     if f.estado == 'inhabilitado':
@@ -73,7 +84,7 @@ def televisores_filtrados(f: Filtros | None = None):
 def pines_filtrados(f: Filtros | None = None):
     """Pines usados acotados por fecha y serial del televisor asociado."""
     f = f or Filtros()
-    qs = PinCodeUsado.objects.all()
+    qs = acotar(PinCodeUsado.objects.all(), f.user)
     if f.desde:
         qs = qs.filter(creado__date__gte=f.desde)
     if f.hasta:
@@ -91,11 +102,13 @@ def acciones_querysets(f: Filtros | None = None):
     """Querysets de acciones (individuales + masivas) ya filtrados. Reutilizado
     por el resumen y por las exportaciones a nivel de registro."""
     f = f or Filtros()
-    syncs = SyncJob.objects.select_related('televisor', 'usuario')
-    items = (
+    syncs = acotar(SyncJob.objects.select_related('televisor', 'usuario'), f.user)
+    items = acotar(
         BulkSyncItem.objects
         .select_related('televisor', 'job', 'job__usuario')
-        .filter(job__modo=BulkSyncJob.SYNC)
+        .filter(job__modo=BulkSyncJob.SYNC),
+        f.user,
+        campo='job__empresa',
     )
     if f.desde:
         syncs = syncs.filter(creado__date__gte=f.desde)
@@ -155,11 +168,9 @@ def acciones(f: Filtros | None = None) -> list[dict]:
     return filas
 
 
-def _estatus_inhabilitacion(qs=None) -> dict:
+def _estatus_inhabilitacion(qs) -> dict:
     """Estatus de inhabilitación discriminando producto financiado
-    (financiado = tiene número de crédito)."""
-    if qs is None:
-        qs = Televisor.objects.all()
+    (financiado = tiene número de crédito). `qs` llega ya acotado a la empresa."""
     resultado = {
         'inhabilitado': {'financiado': 0, 'no_financiado': 0},
         'habilitado': {'financiado': 0, 'no_financiado': 0},
@@ -233,10 +244,11 @@ def _actividad_por_equipo(filas: list[dict]) -> list[dict]:
     return sorted(por_equipo.values(), key=lambda d: d['total'], reverse=True)
 
 
-def _usuarios() -> dict:
-    total = User.objects.count()
-    activos = User.objects.filter(is_active=True).count()
-    staff = User.objects.filter(is_staff=True).count()
+def _usuarios(f: Filtros) -> dict:
+    qs = acotar(User.objects.all(), f.user)
+    total = qs.count()
+    activos = qs.filter(is_active=True).count()
+    staff = qs.filter(is_staff=True).count()
     return {
         'total': total,
         'activos': activos,
@@ -255,7 +267,7 @@ class DashboardResumenView(APIView):
         if periodo not in ('dia', 'semana', 'mes', 'anio'):
             periodo = 'mes'
 
-        f = Filtros.from_request(request.query_params)
+        f = Filtros.from_request(request.query_params, request.user)
         tv_qs = televisores_filtrados(f)
 
         filas = acciones(f)
@@ -282,5 +294,5 @@ class DashboardResumenView(APIView):
                 'datos': serie_tiempo(filas, periodo),
             },
             'actividad_por_equipo': _actividad_por_equipo(filas),
-            'usuarios': _usuarios(),
+            'usuarios': _usuarios(f),
         })

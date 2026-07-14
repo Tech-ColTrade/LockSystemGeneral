@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from django.contrib.auth import get_user_model
 from rest_framework import filters, generics, permissions, status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -15,7 +15,13 @@ from rest_framework_simplejwt.serializers import (
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
-from users.authentication import TOKEN_VERSION_CLAIM, token_esta_revocado
+from empresas.models import Empresa
+from empresas.scoping import acotar, es_acceso_global
+from users.authentication import (
+    TOKEN_VERSION_CLAIM,
+    empresa_inactiva,
+    token_esta_revocado,
+)
 from users.permissions import IsAdminRole
 from users.selectors import user_list
 from users.services import user_set_password
@@ -71,6 +77,13 @@ class VersionedTokenObtainPairSerializer(TokenObtainPairSerializer):
         token[TOKEN_VERSION_CLAIM] = user.token_version
         return token
 
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        # Empresa desactivada -> su gente no entra, aunque la cuenta siga activa.
+        if empresa_inactiva(self.user):
+            raise InvalidToken('La empresa de tu cuenta está desactivada.')
+        return data
+
 
 class LoginView(TokenObtainPairView):
     """Obtiene el par de tokens (access/refresh) con email + password."""
@@ -98,6 +111,8 @@ class RevocationAwareTokenRefreshSerializer(TokenRefreshSerializer):
             raise InvalidToken('La cuenta no está disponible.')
         if token_esta_revocado(user, refresh):
             raise InvalidToken('La sesión fue cerrada. Inicia sesión de nuevo.')
+        if empresa_inactiva(user):
+            raise InvalidToken('La empresa de tu cuenta está desactivada.')
 
         return super().validate(attrs)
 
@@ -157,14 +172,41 @@ class ChangePasswordView(APIView):
 # ---------------------------------------------------------------------------
 # Gestión de usuarios (solo Administrador)
 # ---------------------------------------------------------------------------
+def _empresa_del_nuevo_usuario(request):
+    """A qué empresa pertenece el usuario que se está creando.
+
+    Un administrador de empresa solo puede crear gente **en la suya**: la empresa
+    se toma de su cuenta y se ignora lo que venga en el cuerpo. El administrador
+    general no tiene empresa propia, así que tiene que decir cuál.
+    """
+    if not es_acceso_global(request.user):
+        return request.user.empresa
+
+    empresa_id = request.data.get('empresa')
+    if not empresa_id:
+        raise ValidationError(
+            {'empresa': 'Indica a qué empresa pertenece el usuario.'}
+        )
+    empresa = Empresa.objects.filter(pk=empresa_id).first()
+    if empresa is None:
+        raise ValidationError({'empresa': 'La empresa indicada no existe.'})
+    return empresa
+
+
 class AdminUserListCreateView(generics.ListCreateAPIView):
-    """Lista y crea usuarios. Reservado a administradores."""
+    """Lista y crea usuarios **de la propia empresa**. Reservado a administradores.
+
+    El administrador general (superusuario) ve los de todas y elige empresa al
+    crear.
+    """
 
     permission_classes = [permissions.IsAuthenticated, IsAdminRole]
-    queryset = user_list().order_by('-date_joined')
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['email', 'first_name', 'last_name']
     ordering_fields = ['email', 'date_joined', 'role']
+
+    def get_queryset(self):
+        return acotar(user_list(), self.request.user).order_by('-date_joined')
 
     def get_serializer_class(self):
         if self.request.method == 'POST':
@@ -174,16 +216,22 @@ class AdminUserListCreateView(generics.ListCreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        user = serializer.save(empresa=_empresa_del_nuevo_usuario(request))
         # Respondemos con la vista segura (sin contraseña, con rol legible).
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
 class AdminUserDetailView(generics.RetrieveUpdateAPIView):
-    """Consulta y edita un usuario (rol, nombre, activo). Solo administradores."""
+    """Consulta y edita un usuario (rol, nombre, activo). Solo administradores.
+
+    El queryset va acotado a la empresa: pedir un usuario de otra empresa da 404
+    (no 403, que confirmaría que ese id existe).
+    """
 
     permission_classes = [permissions.IsAuthenticated, IsAdminRole]
-    queryset = user_list()
+
+    def get_queryset(self):
+        return acotar(user_list(), self.request.user)
 
     def get_serializer_class(self):
         if self.request.method in ('PUT', 'PATCH'):
@@ -192,10 +240,24 @@ class AdminUserDetailView(generics.RetrieveUpdateAPIView):
 
     def perform_update(self, serializer):
         target = self.get_object()
+        data = serializer.validated_data
+
+        # Cambiar a alguien de empresa es darle acceso a los datos de otra: solo
+        # el administrador general puede. Un admin de empresa que lo intente se
+        # lleva un rechazo explícito (no un ignorado silencioso).
+        empresa = data.get('empresa')
+        if (
+            empresa is not None
+            and empresa != target.empresa
+            and not es_acceso_global(self.request.user)
+        ):
+            raise PermissionDenied(
+                'Solo el administrador general puede cambiar la empresa de un usuario.'
+            )
+
         # Evita que un administrador se bloquee a sí mismo (perder acceso admin
         # o desactivar su propia cuenta) desde esta pantalla.
         if target == self.request.user:
-            data = serializer.validated_data
             if data.get('role', target.role) != target.role and not target.is_superuser:
                 raise ValidationError('No puedes cambiar tu propio rol.')
             if data.get('is_active', target.is_active) is False:

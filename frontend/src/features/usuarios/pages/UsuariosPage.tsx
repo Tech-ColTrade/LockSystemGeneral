@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, CircleAlert, Plus } from 'lucide-react'
+import { Building2, ChevronLeft, ChevronRight, CircleAlert, Plus } from 'lucide-react'
 import { usuariosApi } from '@/features/usuarios/api/usuarios.api'
+import { usePermissions } from '@/features/auth/usePermissions'
 import type { User } from '@/features/auth/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -21,6 +22,11 @@ import {
 const PAGE_SIZE = 10
 
 export function UsuariosPage() {
+  // La columna Empresa solo tiene sentido para el administrador general: a un
+  // admin de empresa todos los usuarios que ve son, por definición, de la suya.
+  const { isSuperAdmin } = usePermissions()
+  const columnas = isSuperAdmin ? 6 : 5
+
   const [items, setItems] = useState<User[]>([])
   const [count, setCount] = useState(0)
   const [page, setPage] = useState(1)
@@ -95,6 +101,7 @@ export function UsuariosPage() {
             <TableRow>
               <TableHead>Correo</TableHead>
               <TableHead>Nombre</TableHead>
+              {isSuperAdmin && <TableHead>Empresa</TableHead>}
               <TableHead>Rol</TableHead>
               <TableHead>Estado</TableHead>
               <TableHead className="text-right">Acciones</TableHead>
@@ -104,7 +111,7 @@ export function UsuariosPage() {
             {loading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i}>
-                  {Array.from({ length: 5 }).map((__, j) => (
+                  {Array.from({ length: columnas }).map((__, j) => (
                     <TableCell key={j}>
                       <Skeleton className="h-4 w-full max-w-32" />
                     </TableCell>
@@ -114,7 +121,7 @@ export function UsuariosPage() {
             ) : items.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={columnas}
                   className="h-24 text-center text-muted-foreground"
                 >
                   No se encontraron usuarios.
@@ -129,6 +136,20 @@ export function UsuariosPage() {
                     </Link>
                   </TableCell>
                   <TableCell>{u.full_name || '—'}</TableCell>
+                  {isSuperAdmin && (
+                    <TableCell>
+                      {u.empresa ? (
+                        <span className="flex items-center gap-1.5">
+                          <Building2 className="size-3.5 text-muted-foreground" />
+                          {u.empresa.nombre}
+                        </span>
+                      ) : (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          Admin general
+                        </Badge>
+                      )}
+                    </TableCell>
+                  )}
                   <TableCell>
                     <Badge variant="secondary">{u.role_display}</Badge>
                   </TableCell>

@@ -66,6 +66,7 @@ INSTALLED_APPS = [
 
     # Apps locales
     'common',
+    'empresas',  # multi-tenant: va antes que `users`, que depende de Empresa
     'users',
     'api',
     'televisores',

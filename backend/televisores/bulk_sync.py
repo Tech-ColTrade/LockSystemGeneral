@@ -155,13 +155,13 @@ def _ejecutar_validacion(job_id: int):
         connections.close_all()
 
 
-def lanzar_validacion_masiva() -> BulkSyncJob | None:
-    """Crea un BulkSyncJob de validación para TODOS los TV y lanza el hilo."""
-    televisores = list(Televisor.objects.all())
+def lanzar_validacion_masiva(empresa) -> BulkSyncJob | None:
+    """Crea un BulkSyncJob de validación para los TV de la empresa y lanza el hilo."""
+    televisores = list(Televisor.objects.filter(empresa=empresa))
     if not televisores:
         return None
     job = BulkSyncJob.objects.create(
-        modo=BulkSyncJob.VALIDACION, total=len(televisores)
+        empresa=empresa, modo=BulkSyncJob.VALIDACION, total=len(televisores)
     )
     BulkSyncItem.objects.bulk_create([
         BulkSyncItem(
@@ -177,10 +177,15 @@ def lanzar_validacion_masiva() -> BulkSyncJob | None:
 
 
 def lanzar_bulk_job(
-    cambiados: list[Televisor], resumen: dict, usuario=None, ip: str | None = None
+    cambiados: list[Televisor],
+    resumen: dict,
+    empresa,
+    usuario=None,
+    ip: str | None = None,
 ) -> BulkSyncJob:
     """Crea el BulkSyncJob + items para los TV cambiados y lanza el hilo."""
     job = BulkSyncJob.objects.create(
+        empresa=empresa,
         total=len(cambiados),
         creados=resumen.get('creados', 0),
         actualizados=resumen.get('actualizados', 0),

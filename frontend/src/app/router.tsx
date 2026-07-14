@@ -9,7 +9,7 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { ProtectedRoute } from '@/features/auth/components/ProtectedRoute'
 import { RequireRole } from '@/features/auth/components/RequireRole'
-import { canOperate, isAdmin } from '@/features/auth/permissions'
+import { canOperate, isAdmin, isSuperAdmin } from '@/features/auth/permissions'
 import { LoginPage } from '@/features/auth/pages/LoginPage'
 import { TelevisoresPage } from '@/features/televisores/pages/TelevisoresPage'
 import { TelevisorFormPage } from '@/features/televisores/pages/TelevisorFormPage'
@@ -23,6 +23,7 @@ import { SincronizacionesPage } from '@/features/sincronizaciones/pages/Sincroni
 import { PincodesPage } from '@/features/pincodes/pages/PincodesPage'
 import { UsuariosPage } from '@/features/usuarios/pages/UsuariosPage'
 import { UsuarioFormPage } from '@/features/usuarios/pages/UsuarioFormPage'
+import { EmpresasPage } from '@/features/empresas/pages/EmpresasPage'
 import { SettingsPage } from '@/features/settings/pages/SettingsPage'
 import { DashboardLayout } from '@/shared/layout/DashboardLayout'
 
@@ -133,6 +134,18 @@ export const router = createBrowserRouter([
                 path: '/usuarios/:id/editar',
                 element: <UsuarioFormPage />,
                 handle: { breadcrumb: 'Usuarios / Editar' },
+              },
+            ],
+          },
+
+          // --- Empresas (tenants): solo el Administrador general ---
+          {
+            element: <RequireRole allow={isSuperAdmin} />,
+            children: [
+              {
+                path: '/empresas',
+                element: <EmpresasPage />,
+                handle: { breadcrumb: 'Empresas' },
               },
             ],
           },

@@ -25,15 +25,18 @@ class UserAdmin(BaseUserAdmin):
     model = User
 
     ordering = ('-date_joined',)
-    list_display = ('email', 'full_name', 'role', 'is_active', 'is_staff', 'date_joined')
-    list_filter = ('role', 'is_active', 'is_staff', 'is_superuser', 'groups')
+    list_display = (
+        'email', 'full_name', 'empresa', 'role', 'is_active', 'is_staff', 'date_joined',
+    )
+    list_filter = ('empresa', 'role', 'is_active', 'is_staff', 'is_superuser', 'groups')
     search_fields = ('email', 'first_name', 'last_name')
     readonly_fields = ('date_joined', 'updated_at', 'last_login')
+    list_select_related = ('empresa',)
 
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
         (_('Datos personales'), {'fields': ('first_name', 'last_name')}),
-        (_('Rol'), {'fields': ('role',)}),
+        (_('Empresa y rol'), {'fields': ('empresa', 'role')}),
         (_('Permisos'), {
             'fields': (
                 'is_active',
@@ -49,6 +52,6 @@ class UserAdmin(BaseUserAdmin):
     add_fieldsets = (
         (None, {
             'classes': ('wide',),
-            'fields': ('email', 'password1', 'password2'),
+            'fields': ('email', 'password1', 'password2', 'empresa', 'role'),
         }),
     )

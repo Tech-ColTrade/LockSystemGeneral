@@ -22,6 +22,17 @@ def token_esta_revocado(user, validated_token) -> bool:
     return validated_token.get(TOKEN_VERSION_CLAIM) != getattr(user, 'token_version', 0)
 
 
+def empresa_inactiva(user) -> bool:
+    """True si el usuario pertenece a una empresa desactivada.
+
+    Desactivar la empresa corta el acceso de toda su gente sin tener que ir
+    usuario por usuario. Se comprueba en cada petición y no solo en el login:
+    de lo contrario, un token ya emitido seguiría entrando hasta expirar.
+    """
+    empresa = getattr(user, 'empresa', None)
+    return empresa is not None and not empresa.activa
+
+
 class RevocationAwareJWTAuthentication(JWTAuthentication):
     """JWTAuthentication que además respeta la revocación por versión de token."""
 
@@ -29,4 +40,6 @@ class RevocationAwareJWTAuthentication(JWTAuthentication):
         user = super().get_user(validated_token)
         if token_esta_revocado(user, validated_token):
             raise InvalidToken('La sesión fue cerrada. Inicia sesión de nuevo.')
+        if empresa_inactiva(user):
+            raise InvalidToken('La empresa de tu cuenta está desactivada.')
         return user

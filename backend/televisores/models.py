@@ -17,6 +17,18 @@ class Televisor(models.Model):
     secciones; aquí solo vive el CRUD del dispositivo.
     """
 
+    # Empresa dueña del televisor: solo su gente lo ve y lo gestiona.
+    empresa = models.ForeignKey(
+        'empresas.Empresa',
+        verbose_name='empresa',
+        on_delete=models.PROTECT,
+        related_name='televisores',
+    )
+
+    # MAC y serial son únicos en TODO el sistema, no por empresa. Un televisor es
+    # un aparato físico y el portal WhaleTV es una sola cuenta compartida: el
+    # mismo equipo no puede pertenecer a dos empresas a la vez. Si otra empresa
+    # intenta registrarlo, se rechaza sin decirle de quién es (ver serializers).
     mac_address = models.CharField('Dirección MAC', max_length=50, unique=True)
     serial_number = models.CharField(
         'Número de serie', max_length=50, blank=True, default=''
@@ -45,6 +57,16 @@ class Televisor(models.Model):
         verbose_name = 'televisor'
         verbose_name_plural = 'televisores'
         ordering = ['-created_at']
+        constraints = [
+            # El serial es opcional, así que la unicidad solo aplica cuando hay
+            # uno: un índice único a secas dejaría registrar un único televisor
+            # sin serial en todo el sistema.
+            models.UniqueConstraint(
+                fields=['serial_number'],
+                condition=~models.Q(serial_number=''),
+                name='televisor_serial_unico',
+            ),
+        ]
 
     def __str__(self):
         return self.mac_address
@@ -103,6 +125,12 @@ class SyncJob(models.Model):
         (ERROR, 'Error'),
     ]
 
+    empresa = models.ForeignKey(
+        'empresas.Empresa',
+        verbose_name='empresa',
+        on_delete=models.CASCADE,
+        related_name='sync_jobs',
+    )
     televisor = models.ForeignKey(
         Televisor, related_name='sync_jobs', on_delete=models.CASCADE
     )
@@ -158,6 +186,15 @@ class BulkSyncJob(models.Model):
     VALIDACION = 'validacion'
     MODOS = [(SYNC, 'Sincronización'), (VALIDACION, 'Validación')]
 
+    # Un lote no cuelga de ningún televisor concreto, así que necesita su propia
+    # empresa: es lo que permite que el polling del progreso y la exportación del
+    # lote solo los vea quien lo lanzó.
+    empresa = models.ForeignKey(
+        'empresas.Empresa',
+        verbose_name='empresa',
+        on_delete=models.CASCADE,
+        related_name='bulk_sync_jobs',
+    )
     modo = models.CharField(max_length=12, choices=MODOS, default=SYNC)
     estado = models.CharField(max_length=12, choices=ESTADOS, default=PENDIENTE)
     # El usuario pidió cancelar: el hilo en segundo plano revisa este flag
@@ -206,6 +243,15 @@ class BulkSyncJob(models.Model):
 class PinCodeUsado(models.Model):
     """Bitácora de cada Código Pin usado a través de la app (MAC + passcode + pin)."""
 
+    # Empresa propia y no derivada del televisor: `televisor` es SET_NULL, así que
+    # al borrar el equipo la bitácora sobrevive sin dueño. Sin esta columna, esos
+    # pines (que llevan un código de desbloqueo) quedarían visibles para todos.
+    empresa = models.ForeignKey(
+        'empresas.Empresa',
+        verbose_name='empresa',
+        on_delete=models.CASCADE,
+        related_name='pincodes_usados',
+    )
     televisor = models.ForeignKey(
         Televisor,
         null=True,

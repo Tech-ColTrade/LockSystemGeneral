@@ -13,6 +13,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
+from empresas.api.serializers import EmpresaBreveSerializer
+from empresas.models import Empresa
 from users.models import Role
 from users.services import user_create, user_update
 
@@ -55,6 +57,10 @@ class UserSerializer(serializers.ModelSerializer):
 
     full_name = serializers.CharField(read_only=True)
     role_display = serializers.CharField(source='get_role_display', read_only=True)
+    # La empresa se expone (el front muestra a quién pertenece la sesión) pero no
+    # es editable desde la API: se fija al crear la cuenta.
+    empresa = EmpresaBreveSerializer(read_only=True)
+    is_superadmin = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = User
@@ -66,6 +72,8 @@ class UserSerializer(serializers.ModelSerializer):
             'full_name',
             'role',
             'role_display',
+            'empresa',
+            'is_superadmin',
             'is_active',
             'date_joined',
             'accent',
@@ -113,13 +121,23 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
 
 
 class AdminUserUpdateSerializer(serializers.ModelSerializer):
-    """Edición de usuario por un administrador (nombre, rol, activo)."""
+    """Edición de usuario por un administrador (nombre, rol, activo, empresa).
+
+    `empresa` solo la puede cambiar el administrador general: mover a alguien de
+    empresa es darle acceso a los datos de otra, así que la vista rechaza el
+    campo si lo manda cualquier otro (ver AdminUserDetailView.perform_update).
+    No se acepta vaciarla: un usuario sin empresa que no sea superusuario no
+    vería nada.
+    """
 
     role = serializers.ChoiceField(choices=Role.choices, required=False)
+    empresa = serializers.PrimaryKeyRelatedField(
+        queryset=Empresa.objects.all(), required=False, allow_null=False,
+    )
 
     class Meta:
         model = User
-        fields = ('first_name', 'last_name', 'role', 'is_active')
+        fields = ('first_name', 'last_name', 'role', 'is_active', 'empresa')
 
     def update(self, instance: User, validated_data: dict) -> User:
         return user_update(user=instance, data=validated_data)

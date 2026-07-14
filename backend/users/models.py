@@ -42,6 +42,19 @@ class User(AbstractBaseUser, PermissionsMixin):
     first_name = models.CharField(_('nombres'), max_length=150, blank=True)
     last_name = models.CharField(_('apellidos'), max_length=150, blank=True)
 
+    # Empresa (tenant) a la que pertenece el usuario: define QUÉ datos ve. Un rol
+    # dice qué puede hacer; la empresa dice sobre qué. Vacía solo en el
+    # superusuario, que es el administrador general y ve todas las empresas.
+    empresa = models.ForeignKey(
+        'empresas.Empresa',
+        verbose_name=_('empresa'),
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='usuarios',
+        help_text=_('Vacío = acceso global (solo administradores generales).'),
+    )
+
     role = models.CharField(
         _('rol'),
         max_length=20,
@@ -106,8 +119,17 @@ class User(AbstractBaseUser, PermissionsMixin):
     # ------------------------------------------------------------------
     @property
     def is_admin_role(self) -> bool:
-        """Administrador: superusuarios y usuarios con rol admin."""
+        """Administrador: superusuarios y usuarios con rol admin.
+
+        Ojo: administrador NO significa "ve todo". Un admin de empresa administra
+        **dentro de su empresa**; quien ve todas las empresas es `is_superadmin`.
+        """
         return self.is_superuser or self.role == Role.ADMIN
+
+    @property
+    def is_superadmin(self) -> bool:
+        """Administrador general: ve y gestiona todas las empresas."""
+        return self.is_superuser
 
     @property
     def can_operate(self) -> bool:

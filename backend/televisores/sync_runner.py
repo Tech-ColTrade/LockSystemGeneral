@@ -59,6 +59,9 @@ def lanzar_sync_job(
 ) -> SyncJob:
     """Crea el SyncJob y lanza el hilo que lo procesa. Devuelve el job."""
     job = SyncJob.objects.create(
+        # La empresa sale del televisor, que ya viene acotado por la vista: el
+        # hilo de fondo no tiene request, así que no puede deducirla él.
+        empresa=televisor.empresa,
         televisor=televisor,
         inhabilitar=inhabilitar,
         usuario=usuario if usuario and usuario.is_authenticated else None,

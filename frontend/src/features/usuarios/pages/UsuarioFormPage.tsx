@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { CircleAlert, Loader2 } from 'lucide-react'
+import { CircleAlert, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { usuariosApi } from '@/features/usuarios/api/usuarios.api'
+import { empresasApi, type Empresa } from '@/features/empresas/api/empresas.api'
 import { ROLE_LABELS } from '@/features/auth/permissions'
 import { usePermissions } from '@/features/auth/usePermissions'
 import type { Role } from '@/features/auth/types'
@@ -59,7 +60,7 @@ export function UsuarioFormPage() {
   const { id } = useParams()
   const isEdit = Boolean(id)
   const navigate = useNavigate()
-  const { user: current } = usePermissions()
+  const { user: current, isSuperAdmin } = usePermissions()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -67,6 +68,28 @@ export function UsuarioFormPage() {
   const [lastName, setLastName] = useState('')
   const [role, setRole] = useState<Role>('consulta')
   const [isActive, setIsActive] = useState(true)
+  const [showPassword, setShowPassword] = useState(false)
+
+  // Solo el administrador general elige (y cambia) la empresa. Para los demás
+  // el campo ni existe: al crear, el backend asigna la suya; al editar, rechaza
+  // el cambio. Mover a alguien de empresa es darle acceso a los datos de otra.
+  const [empresaId, setEmpresaId] = useState('')
+  const [empresas, setEmpresas] = useState<Empresa[]>([])
+  const eligeEmpresa = isSuperAdmin
+
+  useEffect(() => {
+    if (!eligeEmpresa) return
+    let activo = true
+    empresasApi
+      .list()
+      .then((r) => activo && setEmpresas(r.results.filter((e) => e.activa)))
+      .catch(() => {
+        /* si falla, el backend rechazará el alta con un mensaje claro */
+      })
+    return () => {
+      activo = false
+    }
+  }, [eligeEmpresa])
 
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [general, setGeneral] = useState<string | null>(null)
@@ -87,6 +110,7 @@ export function UsuarioFormPage() {
         setLastName(u.last_name)
         setRole(u.role)
         setIsActive(u.is_active)
+        setEmpresaId(u.empresa?.id ?? '')
       })
       .catch((e) => active && setGeneral((e as Error).message))
       .finally(() => active && setLoading(false))
@@ -107,6 +131,7 @@ export function UsuarioFormPage() {
           last_name: lastName,
           role,
           is_active: isActive,
+          ...(eligeEmpresa && empresaId ? { empresa: empresaId } : {}),
         })
       } else {
         await usuariosApi.create({
@@ -115,6 +140,7 @@ export function UsuarioFormPage() {
           first_name: firstName,
           last_name: lastName,
           role,
+          ...(eligeEmpresa ? { empresa: empresaId } : {}),
         })
       }
       navigate('/usuarios')
@@ -181,15 +207,32 @@ export function UsuarioFormPage() {
             {!isEdit && (
               <div className="grid gap-2">
                 <Label htmlFor="password">Contraseña</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Mínimo 10 caracteres"
-                  autoComplete="new-password"
-                  required
-                />
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Mínimo 10 caracteres"
+                    autoComplete="new-password"
+                    required
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                    aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                    aria-pressed={showPassword}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="size-4" />
+                    ) : (
+                      <Eye className="size-4" />
+                    )}
+                  </button>
+                </div>
                 <FieldError msg={fieldErrors.password} />
               </div>
             )}
@@ -214,6 +257,39 @@ export function UsuarioFormPage() {
                 <FieldError msg={fieldErrors.last_name} />
               </div>
             </div>
+
+            {eligeEmpresa && (
+              <div className="grid gap-2">
+                <Label htmlFor="empresa">Empresa</Label>
+                <Select
+                  value={empresaId}
+                  onValueChange={(v) => setEmpresaId(v ?? '')}
+                >
+                  <SelectTrigger id="empresa" className="w-full">
+                    {/* Render-prop: sin esto el trigger muestra el id crudo en
+                        vez del nombre (igual que el select de Rol). */}
+                    <SelectValue placeholder="Selecciona una empresa">
+                      {(v: string) =>
+                        empresas.find((e) => e.id === v)?.nombre ?? ''
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {empresas.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.nombre}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {isEdit
+                    ? 'Al cambiarla, el usuario deja de ver los datos de su empresa anterior y pasa a ver los de la nueva. Los televisores que haya creado se quedan donde están.'
+                    : 'El usuario solo verá los televisores y registros de esta empresa.'}
+                </p>
+                <FieldError msg={fieldErrors.empresa} />
+              </div>
+            )}
 
             <div className="grid gap-2">
               <Label htmlFor="role">Rol</Label>
@@ -263,7 +339,7 @@ export function UsuarioFormPage() {
             )}
 
             <div className="flex gap-2 pt-1">
-              <Button type="submit" disabled={saving}>
+              <Button type="submit" disabled={saving || (eligeEmpresa && !empresaId)}>
                 {saving && <Loader2 className="animate-spin" />}
                 {saving ? 'Guardando…' : 'Guardar'}
               </Button>

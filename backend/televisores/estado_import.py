@@ -55,8 +55,12 @@ def _mapear_columnas(headers: list[str]) -> dict:
     return mapa
 
 
-def procesar_enrolar_estado(nombre: str, data: bytes) -> dict:
+def procesar_enrolar_estado(nombre: str, data: bytes, empresa) -> dict:
     """Aplica los estados del archivo y devuelve el resumen + los TV cambiados.
+
+    Solo toca televisores de `empresa`. Una MAC que ya exista en otra empresa se
+    rechaza como error de fila: cambiar el estado de un equipo ajeno lo
+    bloquearía/desbloquearía de verdad en el portal, no solo en la app.
 
     Return: {'creados', 'actualizados', 'errores': [..], 'cambiados': [Televisor,..]}
     """
@@ -98,9 +102,21 @@ def procesar_enrolar_estado(nombre: str, data: bytes) -> dict:
     if not orden:
         return {'creados': 0, 'actualizados': 0, 'errores': errores or ['No hay filas válidas.'], 'cambiados': []}
 
-    existentes = {
+    encontrados = {
         tv.mac_address.upper(): tv
         for tv in Televisor.objects.filter(mac_address__in=[deseado[k]['mac'] for k in orden])
+    }
+    existentes = {
+        mac: tv for mac, tv in encontrados.items() if tv.empresa_id == empresa.pk
+    }
+
+    # Seriales ya usados por otro equipo: rechazan la fila en vez de reventar el
+    # bulk_create contra el índice único.
+    seriales_tomados = {
+        s.upper(): mac
+        for s, mac in Televisor.objects.filter(
+            serial_number__in={deseado[k]['serial'] for k in orden} - {''}
+        ).values_list('serial_number', 'mac_address')
     }
 
     cambiados: list[Televisor] = []
@@ -109,9 +125,28 @@ def procesar_enrolar_estado(nombre: str, data: bytes) -> dict:
 
     for k in orden:
         d = deseado[k]
+
+        if k in encontrados and k not in existentes:
+            errores.append(
+                f'{d["mac"]}: esta MAC ya está registrada en el sistema y no '
+                'pertenece a tu empresa.'
+            )
+            continue
+
+        if d['serial']:
+            dueño = seriales_tomados.get(d['serial'].upper())
+            if dueño and dueño.upper() != k:
+                errores.append(
+                    f'{d["mac"]}: el serial "{d["serial"]}" ya está registrado en '
+                    'otro televisor.'
+                )
+                continue
+
         tv = existentes.get(k)
         if tv is None:
-            tv = Televisor(mac_address=d['mac'], serial_number=d['serial'])
+            tv = Televisor(
+                empresa=empresa, mac_address=d['mac'], serial_number=d['serial']
+            )
             nuevos.append(tv)
         else:
             if d['serial'] and tv.serial_number != d['serial']:

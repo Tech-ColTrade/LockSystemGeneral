@@ -19,6 +19,16 @@ class IsAdminRole(BasePermission):
         return bool(user and user.is_authenticated and user.is_admin_role)
 
 
+class IsSuperAdmin(BasePermission):
+    """Solo el administrador general (superusuario), el que ve todas las empresas."""
+
+    message = 'Se requiere ser Administrador general.'
+
+    def has_permission(self, request, view) -> bool:
+        user = request.user
+        return bool(user and user.is_authenticated and user.is_superadmin)
+
+
 class CanOperate(BasePermission):
     """Solo operadores o administradores (acciones de escritura/gestión)."""
 

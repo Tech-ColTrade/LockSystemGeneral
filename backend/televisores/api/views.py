@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
+from empresas.scoping import EmpresaScopedViewSetMixin, acotar
 from televisores.models import Televisor
 from users.permissions import CanOperate
 from televisores.portal.client import (
@@ -28,8 +29,12 @@ from .serializers import (
 )
 
 
-class TelevisorViewSet(viewsets.ModelViewSet):
+class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
     """CRUD de televisores + acciones contra el portal WhaleTV.
+
+    Todo lo de aquí está acotado a la empresa del usuario (ver
+    EmpresaScopedViewSetMixin): el queryset se filtra y lo que se crea se sella
+    con su empresa. Pedir un televisor de otra empresa devuelve 404.
 
     - list / retrieve / create / update / destroy estándar.
     - `?search=` busca por MAC, serial o número de crédito (SearchFilter global).
@@ -39,7 +44,7 @@ class TelevisorViewSet(viewsets.ModelViewSet):
     - `inhabilitar/`     (POST) marca inhabilitado localmente (ver nota).
     """
 
-    queryset = Televisor.objects.all()
+    queryset = Televisor.objects.select_related('empresa')
     serializer_class = TelevisorSerializer
     search_fields = ['mac_address', 'serial_number', 'numero_credito']
     ordering_fields = ['mac_address', 'serial_number', 'created_at']
@@ -77,7 +82,9 @@ class TelevisorViewSet(viewsets.ModelViewSet):
                 {'detail': 'Debes adjuntar un archivo en el campo "archivo".'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        resultado = importar_televisores(archivo.name, archivo.read())
+        resultado = importar_televisores(
+            archivo.name, archivo.read(), empresa=self.empresa_destino()
+        )
         return Response(resultado, status=status.HTTP_200_OK)
 
     # ------------------------------------------------------------------
@@ -135,10 +142,10 @@ class TelevisorViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='validar-masivo')
     def validar_masivo(self, request):
-        """Lanza una validación masiva (dry-run) de todos los televisores."""
+        """Lanza una validación masiva (dry-run) de los televisores de la empresa."""
         from televisores.bulk_sync import lanzar_validacion_masiva
 
-        job = lanzar_validacion_masiva()
+        job = lanzar_validacion_masiva(empresa=self.empresa_destino())
         if job is None:
             return Response(
                 {'detail': 'No hay televisores para validar.'},
@@ -148,6 +155,21 @@ class TelevisorViewSet(viewsets.ModelViewSet):
             {'job': job.pk, 'total': job.total}, status=status.HTTP_202_ACCEPTED
         )
 
+    # ------------------------------------------------------------------
+    # Lotes (BulkSyncJob): siempre se buscan dentro de la empresa del usuario.
+    # Un job es un id secuencial y adivinable, así que sin este filtro bastaría
+    # con probar números para leer los lotes (y las MAC) de otra empresa.
+    # ------------------------------------------------------------------
+    def _buscar_bulk_job(self, job_id):
+        from televisores.models import BulkSyncJob
+
+        return (
+            acotar(BulkSyncJob.objects.all(), self.request.user)
+            .prefetch_related('items')
+            .filter(pk=job_id)
+            .first()
+        )
+
     @action(
         detail=False,
         methods=['get'],
@@ -155,11 +177,8 @@ class TelevisorViewSet(viewsets.ModelViewSet):
     )
     def validar_masivo_status(self, request, job_id=None):
         """Progreso/resultado de una validación masiva (polling)."""
-        from televisores.models import BulkSyncJob
-
-        try:
-            job = BulkSyncJob.objects.prefetch_related('items').get(pk=job_id)
-        except BulkSyncJob.DoesNotExist:
+        job = self._buscar_bulk_job(job_id)
+        if job is None:
             return Response(
                 {'detail': 'Job no encontrado.'}, status=status.HTTP_404_NOT_FOUND
             )
@@ -229,6 +248,7 @@ class TelevisorViewSet(viewsets.ModelViewSet):
             pass
 
         registro = PinCodeUsado.objects.create(
+            empresa=tv.empresa,
             televisor=tv,
             mac_address=tv.mac_address,
             passcode=passcode,
@@ -279,9 +299,14 @@ class TelevisorViewSet(viewsets.ModelViewSet):
         """Estado/progreso de un SyncJob (para polling desde el frontend)."""
         from televisores.models import SyncJob
 
-        try:
-            job = SyncJob.objects.get(pk=job_id, televisor_id=pk)
-        except SyncJob.DoesNotExist:
+        # `pk` viene de la URL sin pasar por get_object(), así que el filtro por
+        # empresa hay que ponerlo aquí a mano.
+        job = (
+            acotar(SyncJob.objects.all(), request.user)
+            .filter(pk=job_id, televisor_id=pk)
+            .first()
+        )
+        if job is None:
             return Response(
                 {'detail': 'Job no encontrado.'}, status=status.HTTP_404_NOT_FOUND
             )
@@ -379,12 +404,17 @@ class TelevisorViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        resumen = procesar_enrolar_estado(archivo.name, archivo.read())
+        empresa = self.empresa_destino()
+        resumen = procesar_enrolar_estado(archivo.name, archivo.read(), empresa=empresa)
         cambiados = resumen['cambiados']
 
         job = (
             lanzar_bulk_job(
-                cambiados, resumen, usuario=request.user, ip=client_ip(request)
+                cambiados,
+                resumen,
+                empresa=empresa,
+                usuario=request.user,
+                ip=client_ip(request),
             )
             if cambiados
             else None
@@ -409,6 +439,7 @@ class TelevisorViewSet(viewsets.ModelViewSet):
         return exportar_sincronizaciones(
             request.query_params.get('desde'),
             request.query_params.get('hasta'),
+            user=request.user,
         )
 
     @action(detail=False, methods=['get'], url_path='exportar-pincodes')
@@ -417,6 +448,7 @@ class TelevisorViewSet(viewsets.ModelViewSet):
         return exportar_pincodes(
             request.query_params.get('desde'),
             request.query_params.get('hasta'),
+            user=request.user,
         )
 
     @action(detail=False, methods=['get'], url_path='plantilla-televisores')
@@ -436,11 +468,8 @@ class TelevisorViewSet(viewsets.ModelViewSet):
     )
     def enrolar_estado_status(self, request, job_id=None):
         """Progreso de una sincronización masiva (para polling)."""
-        from televisores.models import BulkSyncJob
-
-        try:
-            job = BulkSyncJob.objects.prefetch_related('items').get(pk=job_id)
-        except BulkSyncJob.DoesNotExist:
+        job = self._buscar_bulk_job(job_id)
+        if job is None:
             return Response(
                 {'detail': 'Job no encontrado.'}, status=status.HTTP_404_NOT_FOUND
             )
@@ -464,11 +493,9 @@ class TelevisorViewSet(viewsets.ModelViewSet):
 
     def _exportar_bulk_job(self, job_id):
         from televisores.api.exports import exportar_bulk_job
-        from televisores.models import BulkSyncJob
 
-        try:
-            job = BulkSyncJob.objects.prefetch_related('items').get(pk=job_id)
-        except BulkSyncJob.DoesNotExist:
+        job = self._buscar_bulk_job(job_id)
+        if job is None:
             return Response(
                 {'detail': 'Job no encontrado.'}, status=status.HTTP_404_NOT_FOUND
             )
@@ -477,11 +504,8 @@ class TelevisorViewSet(viewsets.ModelViewSet):
     def _cancelar_bulk_job(self, job_id):
         """Marca un BulkSyncJob (sync o validación) para que el hilo en
         segundo plano lo detenga en el próximo televisor que revise."""
-        from televisores.models import BulkSyncJob
-
-        try:
-            job = BulkSyncJob.objects.get(pk=job_id)
-        except BulkSyncJob.DoesNotExist:
+        job = self._buscar_bulk_job(job_id)
+        if job is None:
             return Response(
                 {'detail': 'Job no encontrado.'}, status=status.HTTP_404_NOT_FOUND
             )

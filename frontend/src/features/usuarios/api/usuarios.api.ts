@@ -10,6 +10,12 @@ export interface UsuarioCreateInput {
   first_name?: string
   last_name?: string
   role: Role
+  /**
+   * Solo la usa el administrador general, que no tiene empresa propia y debe
+   * decir a cuál pertenece el usuario. A un admin de empresa el backend le
+   * ignora este campo y usa la suya.
+   */
+  empresa?: string
 }
 
 export interface UsuarioUpdateInput {
@@ -17,6 +23,8 @@ export interface UsuarioUpdateInput {
   last_name?: string
   role?: Role
   is_active?: boolean
+  /** Solo el administrador general puede moverlo de empresa (el backend lo exige). */
+  empresa?: string
 }
 
 export const usuariosApi = {

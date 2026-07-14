@@ -22,8 +22,13 @@ def user_create(
     role: str = Role.CONSULTA,
     is_active: bool = True,
     is_staff: bool = False,
+    empresa=None,
 ) -> User:
-    """Crea un usuario estándar aplicando las validaciones del modelo."""
+    """Crea un usuario estándar aplicando las validaciones del modelo.
+
+    `empresa` la fija quien llama a partir de la cuenta que está creando (nunca
+    del cuerpo de la petición): es lo que confina al usuario a sus datos.
+    """
     user = User(
         email=email,
         first_name=first_name,
@@ -31,6 +36,7 @@ def user_create(
         role=role,
         is_active=is_active,
         is_staff=is_staff,
+        empresa=empresa,
     )
     user.full_clean(exclude=['password'])
     user.set_password(password)
@@ -49,7 +55,11 @@ def user_set_password(*, user: User, raw_password: str) -> User:
 @transaction.atomic
 def user_update(*, user: User, data: dict) -> User:
     """Actualiza campos permitidos de un usuario existente."""
-    updatable_fields = {'first_name', 'last_name', 'role', 'is_active', 'accent'}
+    # `empresa` solo llega aquí si quien edita es el administrador general: la
+    # vista rechaza el campo para cualquier otro.
+    updatable_fields = {
+        'first_name', 'last_name', 'role', 'is_active', 'accent', 'empresa',
+    }
     changed = []
 
     for field, value in data.items():

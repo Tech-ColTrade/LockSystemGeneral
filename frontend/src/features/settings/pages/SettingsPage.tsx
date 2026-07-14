@@ -130,6 +130,20 @@ function PerfilPanel() {
             </p>
           </div>
 
+          <div className="grid gap-2">
+            <Label htmlFor="empresa">Empresa</Label>
+            <Input
+              id="empresa"
+              value={user?.empresa?.nombre ?? 'Todas las empresas'}
+              disabled
+            />
+            <p className="text-xs text-muted-foreground">
+              {user?.empresa
+                ? 'Solo ves los televisores y registros de tu empresa.'
+                : 'Como administrador general ves todas las empresas.'}
+            </p>
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="first_name">Nombres</Label>

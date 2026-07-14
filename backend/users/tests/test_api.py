@@ -4,6 +4,8 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from empresas.models import Empresa
+
 User = get_user_model()
 
 STRONG_PASSWORD = 'ClaveSegura123'
@@ -24,11 +26,19 @@ class AdminUserCreateApiTests(APITestCase):
 
     def setUp(self):
         self.url = reverse('users:usuarios')
-        self.admin = User.objects.create_superuser(
-            email='admin@correo.com', password=STRONG_PASSWORD
+        # El admin es administrador DE UNA EMPRESA (el caso normal): la empresa
+        # del usuario que crea es la que hereda el nuevo, sin elegirla.
+        self.empresa = Empresa.objects.create(nombre='Empresa Uno')
+        self.admin = User.objects.create_user(
+            email='admin@correo.com',
+            password=STRONG_PASSWORD,
+            role='admin',
+            empresa=self.empresa,
         )
         self.consulta = User.objects.create_user(
-            email='consulta@correo.com', password=STRONG_PASSWORD
+            email='consulta@correo.com',
+            password=STRONG_PASSWORD,
+            empresa=self.empresa,
         )
 
     def test_anonimo_no_puede_crear(self):

@@ -9,11 +9,23 @@ from televisores.models import (
 )
 
 
+# La MAC y el serial son únicos en todo el sistema, no dentro de la empresa. El
+# mensaje de error NO dice de qué empresa es el equipo: eso convertiría el
+# formulario en un buscador de datos ajenos. Solo dice que ya está tomado.
+YA_REGISTRADO = (
+    'Este {campo} ya está registrado en el sistema. Si el equipo es de tu '
+    'empresa y no lo ves, contacta al administrador.'
+)
+
+
 class TelevisorSerializer(serializers.ModelSerializer):
+    empresa = serializers.CharField(source='empresa.nombre', read_only=True)
+
     class Meta:
         model = Televisor
         fields = [
             'id',
+            'empresa',
             'mac_address',
             'serial_number',
             'numero_credito',
@@ -21,8 +33,9 @@ class TelevisorSerializer(serializers.ModelSerializer):
             'eui64',
             'created_at',
         ]
-        # El estado y las fechas no se editan desde el CRUD del televisor.
-        read_only_fields = ['id', 'inhabilitado', 'created_at']
+        # El estado y las fechas no se editan desde el CRUD del televisor. La
+        # empresa tampoco: la fija la vista con la cuenta que crea el registro.
+        read_only_fields = ['id', 'empresa', 'inhabilitado', 'created_at']
         extra_kwargs = {
             'eui64': {'required': False},
         }
@@ -31,12 +44,28 @@ class TelevisorSerializer(serializers.ModelSerializer):
         value = value.strip().upper()
         if not value:
             raise serializers.ValidationError('La dirección MAC es obligatoria.')
-        # Unicidad (ignorando el propio registro al editar).
+        # Unicidad global (ignorando el propio registro al editar). Ojo: se
+        # consulta sobre TODOS los televisores, no sobre los de la empresa, para
+        # que la MAC de otra empresa también choque.
         qs = Televisor.objects.filter(mac_address=value)
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():
-            raise serializers.ValidationError('Ya existe un televisor con esta MAC.')
+            raise serializers.ValidationError(YA_REGISTRADO.format(campo='MAC'))
+        return value
+
+    def validate_serial_number(self, value: str) -> str:
+        value = (value or '').strip()
+        if not value:
+            return value
+        # `iexact` es más estricto que el índice único de la base de datos (que
+        # distingue mayúsculas): así 'abc123' y 'ABC123' tampoco conviven, que es
+        # lo que espera quien lee un serial de una etiqueta.
+        qs = Televisor.objects.filter(serial_number__iexact=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError(YA_REGISTRADO.format(campo='serial'))
         return value
 
 

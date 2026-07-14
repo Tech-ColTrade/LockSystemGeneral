@@ -14,4 +14,7 @@ urlpatterns = [
 
     # Usuarios y autenticación (register, token, refresh, verify, me)
     path('api/', include('users.api.urls')),
+
+    # Empresas (tenants) — solo el administrador general
+    path('api/', include('empresas.api.urls')),
 ]

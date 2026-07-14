@@ -8,6 +8,7 @@ from rest_framework.generics import ListAPIView
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.views import APIView
 
+from empresas.scoping import acotar
 from televisores.models import BulkSyncItem, BulkSyncJob, PinCodeUsado, SyncJob
 
 from .filtros import filtrar_por_fecha, filtrar_sincronizaciones
@@ -45,7 +46,7 @@ def nombre_usuario(prefix: str):
     )
 
 
-def qs_sincronizaciones(televisor=None, desde=None, hasta=None):
+def qs_sincronizaciones(televisor=None, desde=None, hasta=None, user=None):
     """Historial unificado (individuales + masivos) como UN queryset ordenado.
 
     Se usa UNION en vez de juntar las dos listas en Python porque así el ORDER
@@ -53,9 +54,15 @@ def qs_sincronizaciones(televisor=None, desde=None, hasta=None):
     en vez de traerse la tabla entera para quedarse con 10.
 
     Las columnas de ambas ramas deben coincidir en número, orden y tipo.
+
+    Con `user` el historial se acota a su empresa. El BulkSyncItem no lleva
+    empresa propia: la hereda del lote, de ahí el 'job__empresa'.
     """
     syncs = SyncJob.objects.all()
     items = BulkSyncItem.objects.filter(job__modo=BulkSyncJob.SYNC)
+    if user is not None:
+        syncs = acotar(syncs, user)
+        items = acotar(items, user, campo='job__empresa')
     if televisor is not None:
         syncs = syncs.filter(televisor=televisor)
         items = items.filter(televisor=televisor)
@@ -116,9 +123,11 @@ def _fila(r: dict) -> dict:
     }
 
 
-def construir_sincronizaciones(televisor=None, desde=None, hasta=None) -> list[dict]:
+def construir_sincronizaciones(
+    televisor=None, desde=None, hasta=None, user=None
+) -> list[dict]:
     """Lista completa (sin paginar). La usa el detalle de un televisor."""
-    return [_fila(r) for r in qs_sincronizaciones(televisor, desde, hasta)]
+    return [_fila(r) for r in qs_sincronizaciones(televisor, desde, hasta, user)]
 
 
 class SincronizacionesView(APIView):
@@ -128,6 +137,7 @@ class SincronizacionesView(APIView):
         qs = qs_sincronizaciones(
             desde=request.query_params.get('desde'),
             hasta=request.query_params.get('hasta'),
+            user=request.user,
         )
         paginator = PageNumberPagination()
         # paginate_queryset hace COUNT + LIMIT/OFFSET contra la base: solo se
@@ -145,7 +155,7 @@ class PincodesUsadosView(ListAPIView):
 
     def get_queryset(self):
         return filtrar_por_fecha(
-            super().get_queryset(),
+            acotar(super().get_queryset(), self.request.user),
             self.request.query_params.get('desde'),
             self.request.query_params.get('hasta'),
         )

@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { CircleAlert, Eye, EyeOff, Loader2 } from 'lucide-react'
-import { usuariosApi } from '@/features/usuarios/api/usuarios.api'
-import { empresasApi, type Empresa } from '@/features/empresas/api/empresas.api'
+import {
+  useActualizarUsuario,
+  useCrearUsuario,
+  useUsuario,
+} from '@/features/usuarios/api/usuarios.queries'
+import { useEmpresas } from '@/features/empresas/api/empresas.queries'
 import { ROLE_LABELS } from '@/features/auth/permissions'
 import { usePermissions } from '@/features/auth/usePermissions'
 import type { Role } from '@/features/auth/types'
@@ -64,6 +68,7 @@ export function UsuarioFormPage() {
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [role, setRole] = useState<Role>('consulta')
@@ -74,59 +79,60 @@ export function UsuarioFormPage() {
   // el campo ni existe: al crear, el backend asigna la suya; al editar, rechaza
   // el cambio. Mover a alguien de empresa es darle acceso a los datos de otra.
   const [empresaId, setEmpresaId] = useState('')
-  const [empresas, setEmpresas] = useState<Empresa[]>([])
   const eligeEmpresa = isSuperAdmin
 
-  useEffect(() => {
-    if (!eligeEmpresa) return
-    let activo = true
-    empresasApi
-      .list()
-      .then((r) => activo && setEmpresas(r.results.filter((e) => e.activa)))
-      .catch(() => {
-        /* si falla, el backend rechazará el alta con un mensaje claro */
-      })
-    return () => {
-      activo = false
-    }
-  }, [eligeEmpresa])
+  // Lista de empresas (solo para el admin general). Comparte caché con el panel
+  // de empresas: si ya se cargó allá, aquí es instantáneo. Si falla, el backend
+  // rechazará el alta con un mensaje claro.
+  const empresasQuery = useEmpresas(eligeEmpresa)
+  const empresas = (empresasQuery.data?.results ?? []).filter((e) => e.activa)
 
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [general, setGeneral] = useState<string | null>(null)
-  const [loading, setLoading] = useState(isEdit)
-  const [saving, setSaving] = useState(false)
+
+  // Detalle cacheado (solo al editar); al llegar, se vuelca al formulario.
+  const usuarioQuery = useUsuario(id, isEdit)
+  const loading = isEdit && usuarioQuery.isPending
+
+  const crearUsuario = useCrearUsuario()
+  const actualizarUsuario = useActualizarUsuario(id ?? '')
+  const saving = crearUsuario.isPending || actualizarUsuario.isPending
 
   const isSelf = isEdit && current?.id === id
 
+  // Se siembra el formulario UNA sola vez por id: un refetch en segundo plano
+  // (al volver a la pestaña) no pisa lo que el usuario esté editando. Se
+  // re-siembra solo si se navega a otro usuario.
+  const seededIdRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!isEdit) return
-    let active = true
-    usuariosApi
-      .get(id!)
-      .then((u) => {
-        if (!active) return
-        setEmail(u.email)
-        setFirstName(u.first_name)
-        setLastName(u.last_name)
-        setRole(u.role)
-        setIsActive(u.is_active)
-        setEmpresaId(u.empresa?.id ?? '')
-      })
-      .catch((e) => active && setGeneral((e as Error).message))
-      .finally(() => active && setLoading(false))
-    return () => {
-      active = false
-    }
-  }, [id, isEdit])
+    const u = usuarioQuery.data
+    if (!u) return
+    if (seededIdRef.current === (id ?? '')) return
+    seededIdRef.current = id ?? ''
+    setEmail(u.email)
+    setFirstName(u.first_name)
+    setLastName(u.last_name)
+    setRole(u.role)
+    setIsActive(u.is_active)
+    setEmpresaId(u.empresa?.id ?? '')
+  }, [usuarioQuery.data, id])
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setSaving(true)
     setFieldErrors({})
     setGeneral(null)
+
+    // Al crear, la contraseña se escribe dos veces: se comparan en el cliente
+    // antes de enviar (el backend solo recibe una, así que esta validación vive
+    // aquí). No se toca al editar, donde no se cambia la contraseña.
+    if (!isEdit && password !== confirmPassword) {
+      setFieldErrors({ confirmPassword: 'Las contraseñas no coinciden.' })
+      return
+    }
+
     try {
       if (isEdit) {
-        await usuariosApi.update(id!, {
+        await actualizarUsuario.mutateAsync({
           first_name: firstName,
           last_name: lastName,
           role,
@@ -134,7 +140,7 @@ export function UsuarioFormPage() {
           ...(eligeEmpresa && empresaId ? { empresa: empresaId } : {}),
         })
       } else {
-        await usuariosApi.create({
+        await crearUsuario.mutateAsync({
           email,
           password,
           first_name: firstName,
@@ -148,10 +154,13 @@ export function UsuarioFormPage() {
       const { fields, general: g } = parseErrors(err)
       setFieldErrors(fields)
       setGeneral(g)
-    } finally {
-      setSaving(false)
     }
   }
+
+  // Error al cargar el detalle en edición (además de los de guardado).
+  const loadError =
+    isEdit && usuarioQuery.isError ? (usuarioQuery.error as Error).message : null
+  const displayGeneral = general ?? loadError
 
   if (loading) {
     return (
@@ -176,11 +185,11 @@ export function UsuarioFormPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit} noValidate className="space-y-5">
-            {general && (
+            {displayGeneral && (
               <Alert variant="destructive">
                 <CircleAlert />
                 <AlertTitle>No se pudo guardar</AlertTitle>
-                <AlertDescription>{general}</AlertDescription>
+                <AlertDescription>{displayGeneral}</AlertDescription>
               </Alert>
             )}
 
@@ -234,6 +243,39 @@ export function UsuarioFormPage() {
                   </button>
                 </div>
                 <FieldError msg={fieldErrors.password} />
+              </div>
+            )}
+
+            {!isEdit && (
+              <div className="grid gap-2">
+                <Label htmlFor="confirm_password">Confirmar contraseña</Label>
+                <div className="relative">
+                  <Input
+                    id="confirm_password"
+                    type={showPassword ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Repite la contraseña"
+                    autoComplete="new-password"
+                    required
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                    aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                    aria-pressed={showPassword}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="size-4" />
+                    ) : (
+                      <Eye className="size-4" />
+                    )}
+                  </button>
+                </div>
+                <FieldError msg={fieldErrors.confirmPassword} />
               </div>
             )}
 

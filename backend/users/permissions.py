@@ -30,10 +30,30 @@ class IsSuperAdmin(BasePermission):
 
 
 class CanOperate(BasePermission):
-    """Solo operadores o administradores (acciones de escritura/gestión)."""
+    """Solo operadores o administradores (acciones de escritura/gestión).
+
+    Excluye al administrador general (ver `User.can_operate`): es de solo lectura
+    sobre los datos de las empresas.
+    """
 
     message = 'Se requiere rol de Operador o Administrador.'
 
     def has_permission(self, request, view) -> bool:
         user = request.user
         return bool(user and user.is_authenticated and user.can_operate)
+
+
+class IsNotGlobalAdmin(BasePermission):
+    """Permite a cualquier usuario de empresa (incluido Consulta) pero NO al
+    administrador general.
+
+    Es para acciones que el rol Consulta sí puede hacer pero que mutan datos
+    —entregar un Código Pin lo marca como usado y desbloquea el equipo—, de las
+    que el auditor global debe quedar fuera para ser de solo lectura de verdad.
+    """
+
+    message = 'El administrador general es de solo lectura sobre los televisores.'
+
+    def has_permission(self, request, view) -> bool:
+        user = request.user
+        return bool(user and user.is_authenticated and not user.is_superadmin)

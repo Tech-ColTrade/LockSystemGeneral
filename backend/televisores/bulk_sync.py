@@ -14,9 +14,18 @@ from django.utils import timezone
 from .models import BulkSyncItem, BulkSyncJob, Televisor
 from .portal.client import PortalClient, PortalError
 from .portal.selenium_sync import abrir_sesion, aplicar_en_sesion
+from .sync_limits import cupo_navegador
 
 
 def _ejecutar(job_id: int):
+    """Espera cupo de navegador (masivo) y corre el lote. Mientras espera, el job
+    queda PENDIENTE ("en cola"); solo al conseguir cupo se abre el navegador y se
+    marca CORRIENDO dentro de `_correr_lote`."""
+    with cupo_navegador(masivo=True):
+        _correr_lote(job_id)
+
+
+def _correr_lote(job_id: int):
     driver = None
     try:
         BulkSyncJob.objects.filter(pk=job_id).update(estado=BulkSyncJob.CORRIENDO)

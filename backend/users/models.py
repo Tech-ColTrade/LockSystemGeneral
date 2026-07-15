@@ -133,7 +133,17 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     @property
     def can_operate(self) -> bool:
-        """Puede realizar gestiones de escritura (operador o administrador)."""
+        """Puede realizar gestiones de escritura sobre los datos (televisores,
+        estados, sincronizaciones).
+
+        El administrador general queda FUERA a propósito: es un auditor de solo
+        lectura sobre los datos de las empresas (los ve y exporta todos, pero no
+        los altera). La escritura vive en cada empresa, en su admin u operador.
+        Su poder está en otro plano —usuarios y empresas—, que va por
+        `is_admin_role` / `is_superadmin`, no por aquí.
+        """
+        if self.is_superadmin:
+            return False
         return self.is_admin_role or self.role == Role.OPERADOR
 
     def revoke_tokens(self) -> None:

@@ -1,11 +1,11 @@
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from empresas.scoping import EmpresaScopedViewSetMixin, acotar
 from televisores.models import Televisor
-from users.permissions import CanOperate
+from users.permissions import CanOperate, IsNotGlobalAdmin
 from televisores.portal.client import (
     PortalClient,
     PortalDispositivoNoExiste,
@@ -21,6 +21,19 @@ def client_ip(request) -> str | None:
     if xff:
         return xff.split(',')[0].strip()
     return request.META.get('REMOTE_ADDR')
+
+
+def usuario_para_auditoria(request):
+    """Usuario a registrar en la auditoría, o None.
+
+    Las peticiones por API-key llegan con un usuario sintético (sin fila en la
+    base): no puede guardarse como llave foránea, así que esas acciones quedan
+    con usuario vacío (la trazabilidad va por la API-key y la IP). Solo se
+    devuelve un usuario cuando es una cuenta real y persistida."""
+    from django.contrib.auth import get_user_model
+
+    user = getattr(request, 'user', None)
+    return user if isinstance(user, get_user_model()) and user.pk else None
 from .serializers import (
     BulkSyncJobSerializer,
     PinCodeUsadoSerializer,
@@ -64,9 +77,17 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
         'estado',                    # Habilitar / Inhabilitar (sincroniza al portal)
     })
 
+    # Acción que el rol Consulta sí puede hacer, pero que muta (entrega un pin y
+    # lo marca como usado en el portal). El administrador general queda fuera:
+    # es un auditor de solo lectura. El resto de mutaciones ya están en
+    # OPERATOR_ACTIONS, que CanOperate también le niega.
+    ACCIONES_NO_ADMIN_GLOBAL = frozenset({'pincode_usar'})
+
     def get_permissions(self):
         if self.action in self.OPERATOR_ACTIONS:
             return [permissions.IsAuthenticated(), CanOperate()]
+        if self.action in self.ACCIONES_NO_ADMIN_GLOBAL:
+            return [permissions.IsAuthenticated(), IsNotGlobalAdmin()]
         return [permissions.IsAuthenticated()]
 
     @action(
@@ -165,7 +186,9 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
 
         return (
             acotar(BulkSyncJob.objects.all(), self.request.user)
-            .prefetch_related('items')
+            # items__televisor: el serializer del item saca el serial del
+            # televisor; sin este prefetch sería una consulta por item.
+            .prefetch_related('items__televisor')
             .filter(pk=job_id)
             .first()
         )
@@ -253,7 +276,7 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
             mac_address=tv.mac_address,
             passcode=passcode,
             pin_code=grupo['pinCode'],
-            usuario=request.user if request.user.is_authenticated else None,
+            usuario=usuario_para_auditoria(request),
             ip=client_ip(request),
         )
         return Response({
@@ -279,7 +302,7 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
         tv.save(update_fields=['inhabilitado'])
 
         job = lanzar_sync_job(
-            tv, inhabilitar, usuario=request.user, ip=client_ip(request)
+            tv, inhabilitar, usuario=usuario_para_auditoria(request), ip=client_ip(request)
         )
         return Response(
             {
@@ -299,13 +322,10 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
         """Estado/progreso de un SyncJob (para polling desde el frontend)."""
         from televisores.models import SyncJob
 
-        # `pk` viene de la URL sin pasar por get_object(), así que el filtro por
-        # empresa hay que ponerlo aquí a mano.
-        job = (
-            acotar(SyncJob.objects.all(), request.user)
-            .filter(pk=job_id, televisor_id=pk)
-            .first()
-        )
+        # get_object() resuelve el televisor por la columna que use el viewset
+        # (PK en el panel, serial en integración) y ya viene acotado por empresa.
+        tv = self.get_object()
+        job = SyncJob.objects.filter(pk=job_id, televisor=tv).first()
         if job is None:
             return Response(
                 {'detail': 'Job no encontrado.'}, status=status.HTTP_404_NOT_FOUND
@@ -382,30 +402,52 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
     # ------------------------------------------------------------------
     # Enrolar Estado: cambio de estado masivo + sincronización al portal
     # ------------------------------------------------------------------
+    def _resumen_enrolar_masivo(self, request, empresa):
+        """Procesa la entrada del enrolar-estado y devuelve el resumen (o None si
+        no vino ni archivo ni registros).
+
+        El PANEL identifica cada televisor por su MAC (archivo CSV/XLSX o JSON) y
+        puede crear equipos nuevos. La API de integración sobreescribe este método
+        para identificar por SERIAL (ver IntegracionTelevisorViewSet)."""
+        from televisores.estado_import import (
+            procesar_enrolar_estado,
+            procesar_registros,
+        )
+
+        archivo = request.FILES.get('archivo')
+        if archivo is not None:
+            return procesar_enrolar_estado(
+                archivo.name, archivo.read(), empresa=empresa
+            )
+        if 'registros' in request.data:
+            return procesar_registros(request.data.get('registros'), empresa=empresa)
+        return None
+
     @action(
         detail=False,
         methods=['post'],
         url_path='enrolar-estado',
-        parser_classes=[MultiPartParser, FormParser],
+        parser_classes=[JSONParser, MultiPartParser, FormParser],
     )
     def enrolar_estado(self, request):
-        """Importa estados (habilitado/inhabilitado) desde CSV/XLSX, fija el
-        estado local y lanza la sincronización masiva al portal en 2º plano.
+        """Aplica estados (habilitado/inhabilitado) masivamente y lanza la
+        sincronización con el portal en 2º plano. Devuelve el resumen + el id del
+        job masivo. Acepta los datos de DOS formas:
 
-        Campo multipart: `archivo`. Devuelve el resumen + el id del job masivo.
+        - JSON (integraciones/ERP): {"registros": [{"mac_address","estado",
+          "serial_number"?}, ...]}. No sube ningún archivo.
+        - Archivo (panel): campo multipart `archivo` con un CSV/XLSX.
         """
         from televisores.bulk_sync import lanzar_bulk_job
-        from televisores.estado_import import procesar_enrolar_estado
-
-        archivo = request.FILES.get('archivo')
-        if not archivo:
-            return Response(
-                {'detail': 'Debes adjuntar un archivo en el campo "archivo".'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
         empresa = self.empresa_destino()
-        resumen = procesar_enrolar_estado(archivo.name, archivo.read(), empresa=empresa)
+        resumen = self._resumen_enrolar_masivo(request, empresa)
+        if resumen is None:
+            return Response(
+                {'detail': 'Envía "registros" (JSON) o un archivo en el campo '
+                 '"archivo".'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         cambiados = resumen['cambiados']
 
         job = (
@@ -413,7 +455,7 @@ class TelevisorViewSet(EmpresaScopedViewSetMixin, viewsets.ModelViewSet):
                 cambiados,
                 resumen,
                 empresa=empresa,
-                usuario=request.user,
+                usuario=usuario_para_auditoria(request),
                 ip=client_ip(request),
             )
             if cambiados

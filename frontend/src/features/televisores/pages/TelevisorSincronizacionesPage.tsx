@@ -70,7 +70,10 @@ export function TelevisorSincronizacionesPage() {
     (page: number) => televisoresApi.sincronizacionesDeTV(id!, page),
     [id],
   )
-  const { items, count, page, setPage, loading, error } = usePaginatedList(fetcher)
+  const { items, count, page, setPage, loading, error } = usePaginatedList(
+    ['tv-sincronizaciones', id],
+    fetcher,
+  )
 
   const [exportando, setExportando] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)

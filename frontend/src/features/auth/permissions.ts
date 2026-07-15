@@ -17,9 +17,18 @@ export function isAdmin(user: User | null): boolean {
   return user?.role === 'admin' || isSuperAdmin(user)
 }
 
-/** Operador o Administrador: puede realizar gestiones de escritura. */
+/**
+ * Puede realizar gestiones de escritura sobre los datos (crear/editar TV,
+ * cambiar estados, enrolar, sincronizar).
+ *
+ * El administrador general queda FUERA: es un auditor de solo lectura sobre los
+ * datos de las empresas (los ve y exporta todos, pero no los altera). Su poder
+ * está en otro plano —usuarios y empresas— que no pasa por aquí. Espejo de
+ * `User.can_operate` en el backend.
+ */
 export function canOperate(user: User | null): boolean {
-  return user?.role === 'operador' || isAdmin(user)
+  if (isSuperAdmin(user)) return false
+  return user?.role === 'operador' || user?.role === 'admin'
 }
 
 export const ROLE_LABELS: Record<Role, string> = {

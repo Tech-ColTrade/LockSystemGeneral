@@ -236,8 +236,9 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': '60/hour',
         'user': '1000/hour',
-        'login': '5/min',      # obtención de token
-        'register': '10/hour',  # alta de cuentas
+        'login': '5/min',           # obtención de token
+        'register': '10/hour',      # alta de cuentas
+        'integracion': '2000/hour',  # API-key de integración (por clave)
     },
     # En producción se sirve solo JSON; el navegador de la API queda para dev.
     'DEFAULT_RENDERER_CLASSES': (
@@ -312,6 +313,12 @@ WHALETV_PORTAL = {
     # Suma/resta de días a hoy para la Next Installment Date (igual que whaletv).
     'DIAS_DESFASE': int(os.getenv('WHALETV_PORTAL_DIAS_DESFASE', '30')),
 }
+
+# Tope GLOBAL de navegadores Selenium simultáneos (protege la RAM del servidor;
+# ver televisores/sync_limits.py). En el peor caso coexisten la suma de ambos.
+# Súbelos solo si el plan de RAM aguanta ~500 MB por navegador extra.
+SYNC_MAX_MANUAL = int(os.getenv('SYNC_MAX_MANUAL', '1'))
+SYNC_MAX_MASIVO = int(os.getenv('SYNC_MAX_MASIVO', '2'))
 
 # En producción, exige que los secretos de integración estén definidos: evita
 # desplegar con credenciales vacías (fallo silencioso) o dejarlas en el código.

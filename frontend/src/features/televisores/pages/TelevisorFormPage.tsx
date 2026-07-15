@@ -1,7 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CircleAlert, Loader2, Pencil, Plus } from 'lucide-react'
-import { televisoresApi } from '@/features/televisores/api/televisores.api'
+import {
+  useActualizarTelevisor,
+  useCrearTelevisor,
+  useTelevisor,
+} from '@/features/televisores/api/televisores.queries'
 import type { TelevisorInput } from '@/features/televisores/types'
 import { ApiError } from '@/lib/http/errors'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -55,28 +59,32 @@ export function TelevisorFormPage() {
   const [form, setForm] = useState<TelevisorInput>(emptyForm)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [general, setGeneral] = useState<string | null>(null)
-  const [loading, setLoading] = useState(isEdit)
-  const [saving, setSaving] = useState(false)
 
+  // Detalle cacheado (solo al editar). Al llegar, se vuelca al formulario.
+  const televisorQuery = useTelevisor(id ?? '', isEdit)
+  const loading = isEdit && televisorQuery.isPending
+
+  // Se siembra el formulario UNA sola vez por id: si el query refetchea en
+  // segundo plano (p. ej. al volver a la pestaña) NO se pisa lo que el usuario
+  // esté escribiendo. Se re-siembra solo si se navega a otro registro.
+  const seededIdRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!isEdit) return
-    let active = true
-    televisoresApi
-      .get(id!)
-      .then((tv) => {
-        if (!active) return
-        setForm({
-          mac_address: tv.mac_address,
-          serial_number: tv.serial_number,
-          numero_credito: tv.numero_credito,
-        })
-      })
-      .catch((e) => active && setGeneral((e as Error).message))
-      .finally(() => active && setLoading(false))
-    return () => {
-      active = false
-    }
-  }, [id, isEdit])
+    const tv = televisorQuery.data
+    if (!tv) return
+    if (seededIdRef.current === (id ?? '')) return
+    seededIdRef.current = id ?? ''
+    setForm({
+      mac_address: tv.mac_address,
+      serial_number: tv.serial_number,
+      numero_credito: tv.numero_credito,
+    })
+  }, [televisorQuery.data, id])
+
+  // Mutaciones: al guardar invalidan la caché de televisores, así el cambio se
+  // ve de inmediato en la lista (no queda escondido por el caché).
+  const crear = useCrearTelevisor()
+  const actualizar = useActualizarTelevisor(id ?? '')
+  const saving = crear.isPending || actualizar.isPending
 
   function set<K extends keyof TelevisorInput>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }))
@@ -84,22 +92,26 @@ export function TelevisorFormPage() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setSaving(true)
     setFieldErrors({})
     setGeneral(null)
     try {
       const saved = isEdit
-        ? await televisoresApi.update(id!, form)
-        : await televisoresApi.create(form)
+        ? await actualizar.mutateAsync(form)
+        : await crear.mutateAsync(form)
       navigate(`/televisores/${saved.id}`)
     } catch (err) {
       const { fields, general: g } = parseErrors(err)
       setFieldErrors(fields)
       setGeneral(g)
-    } finally {
-      setSaving(false)
     }
   }
+
+  // Error al cargar el detalle en edición (además de los errores de guardado).
+  const loadError =
+    isEdit && televisorQuery.isError
+      ? (televisorQuery.error as Error).message
+      : null
+  const displayGeneral = general ?? loadError
 
   const titulo = isEdit ? 'Editar televisor' : 'Nuevo televisor'
 
@@ -149,11 +161,11 @@ export function TelevisorFormPage() {
             </div>
           ) : (
             <form onSubmit={onSubmit} noValidate className="flex flex-col gap-5">
-              {general && (
+              {displayGeneral && (
                 <Alert variant="destructive">
                   <CircleAlert />
                   <AlertTitle>No se pudo guardar</AlertTitle>
-                  <AlertDescription>{general}</AlertDescription>
+                  <AlertDescription>{displayGeneral}</AlertDescription>
                 </Alert>
               )}
 

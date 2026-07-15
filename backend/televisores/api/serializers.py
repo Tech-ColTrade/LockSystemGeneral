@@ -97,11 +97,18 @@ class SyncJobSerializer(serializers.ModelSerializer):
 
 
 class BulkSyncItemSerializer(serializers.ModelSerializer):
+    # El serial sale del televisor asociado (la MAC va denormalizada en el item,
+    # el serial no). Con esto el resultado de un lote —validación o enrolar
+    # estado— identifica cada equipo también por serial, que es como lo conoce la
+    # integración. Si el televisor se borró (SET_NULL), sale vacío.
+    serial_number = serializers.SerializerMethodField()
+
     class Meta:
         model = BulkSyncItem
         fields = [
             'id',
             'mac_address',
+            'serial_number',
             'inhabilitar',
             'estado',
             'mensaje',
@@ -109,6 +116,9 @@ class BulkSyncItemSerializer(serializers.ModelSerializer):
             'local_inhabilitado',
             'coincide',
         ]
+
+    def get_serial_number(self, obj) -> str:
+        return obj.televisor.serial_number if obj.televisor_id else ''
 
 
 class BulkSyncJobSerializer(serializers.ModelSerializer):

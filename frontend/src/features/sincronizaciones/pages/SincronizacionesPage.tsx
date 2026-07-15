@@ -75,7 +75,10 @@ export function SincronizacionesPage() {
     (page: number) => registrosApi.sincronizaciones(page, { desde, hasta }),
     [desde, hasta],
   )
-  const { items, count, page, setPage, loading, error } = usePaginatedList(fetcher)
+  const { items, count, page, setPage, loading, error } = usePaginatedList(
+    ['sincronizaciones', { desde, hasta }],
+    fetcher,
+  )
 
   const [exportando, setExportando] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)

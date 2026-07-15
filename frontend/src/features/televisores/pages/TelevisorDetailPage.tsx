@@ -133,7 +133,7 @@ function RegistroRow({
 export function TelevisorDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { canOperate } = usePermissions()
+  const { canOperate, isSuperAdmin } = usePermissions()
   const [tv, setTv] = useState<Televisor | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -381,7 +381,10 @@ export function TelevisorDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Código Pin (Habilitación manual) */}
+      {/* Código Pin (Habilitación manual). Entregar un pin lo marca como usado y
+          desbloquea el equipo: es una mutación, así que el auditor global no la
+          ve (sí ve el historial de pines, que es de solo lectura). */}
+      {!isSuperAdmin && (
       <Card>
         <CardHeader className="border-b pb-4">
           <CardTitle className="flex items-center gap-2">
@@ -457,6 +460,7 @@ export function TelevisorDetailPage() {
           )}
         </CardContent>
       </Card>
+      )}
     </div>
   )
 }

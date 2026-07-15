@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Building2, ChevronLeft, ChevronRight, CircleAlert, Plus } from 'lucide-react'
-import { usuariosApi } from '@/features/usuarios/api/usuarios.api'
+import { useUsuarios } from '@/features/usuarios/api/usuarios.queries'
 import { usePermissions } from '@/features/auth/usePermissions'
-import type { User } from '@/features/auth/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,31 +26,13 @@ export function UsuariosPage() {
   const { isSuperAdmin } = usePermissions()
   const columnas = isSuperAdmin ? 6 : 5
 
-  const [items, setItems] = useState<User[]>([])
-  const [count, setCount] = useState(0)
   const [page, setPage] = useState(1)
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let active = true
-    setLoading(true)
-    setError(null)
-    usuariosApi
-      .list(search, page)
-      .then((data) => {
-        if (!active) return
-        setItems(data.results)
-        setCount(data.count)
-      })
-      .catch((e) => active && setError((e as Error).message))
-      .finally(() => active && setLoading(false))
-    return () => {
-      active = false
-    }
-  }, [search, page])
+  const { data, isPending, isFetching, isError, error } = useUsuarios(search, page)
+  const items = data?.results ?? []
+  const count = data?.count ?? 0
 
   function onSearch(e: React.FormEvent) {
     e.preventDefault()
@@ -60,6 +41,10 @@ export function UsuariosPage() {
   }
 
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE))
+  // Esqueletos solo en la primera carga; al paginar/buscar se atenúan las filas.
+  const showSkeleton = isPending
+  const refreshing = isFetching && !isPending
+  const displayError = isError ? (error as Error).message : null
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -87,16 +72,21 @@ export function UsuariosPage() {
         </Button>
       </form>
 
-      {error && (
+      {displayError && (
         <Alert variant="destructive" className="mb-4">
           <CircleAlert />
           <AlertTitle>No se pudo cargar</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{displayError}</AlertDescription>
         </Alert>
       )}
 
       <Card className="gap-0 overflow-hidden p-0">
-        <Table>
+        <Table
+          aria-busy={refreshing}
+          className={
+            refreshing ? 'opacity-60 transition-opacity duration-200' : undefined
+          }
+        >
           <TableHeader>
             <TableRow>
               <TableHead>Correo</TableHead>
@@ -108,7 +98,7 @@ export function UsuariosPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {loading ? (
+            {showSkeleton ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i}>
                   {Array.from({ length: columnas }).map((__, j) => (

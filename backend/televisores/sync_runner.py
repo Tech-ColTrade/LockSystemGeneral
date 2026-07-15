@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from .models import SyncJob, Televisor
 from .portal.selenium_sync import sincronizar_estado
+from .sync_limits import cupo_navegador
 
 
 def _ejecutar(job_id: int):
@@ -20,14 +21,16 @@ def _ejecutar(job_id: int):
         job = SyncJob.objects.get(pk=job_id)
         tv = Televisor.objects.get(pk=job.televisor_id)
 
-        SyncJob.objects.filter(pk=job_id).update(
-            estado=SyncJob.CORRIENDO, porcentaje=5
-        )
-
         def progreso(pct, _msg=''):
             SyncJob.objects.filter(pk=job_id).update(porcentaje=pct)
 
-        res = sincronizar_estado(tv, progreso=progreso)
+        # Espera cupo de navegador (manual). Mientras tanto el job sigue
+        # PENDIENTE ("en cola"); solo se marca CORRIENDO al conseguir el cupo.
+        with cupo_navegador(masivo=False):
+            SyncJob.objects.filter(pk=job_id).update(
+                estado=SyncJob.CORRIENDO, porcentaje=5
+            )
+            res = sincronizar_estado(tv, progreso=progreso)
 
         if res.ok and res.aplicado:
             SyncJob.objects.filter(pk=job_id).update(

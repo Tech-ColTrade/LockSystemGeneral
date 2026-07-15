@@ -42,7 +42,10 @@ export function PincodesPage() {
     (page: number) => registrosApi.pincodes(page, { desde, hasta }),
     [desde, hasta],
   )
-  const { items, count, page, setPage, loading, error } = usePaginatedList(fetcher)
+  const { items, count, page, setPage, loading, error } = usePaginatedList(
+    ['pincodes', { desde, hasta }],
+    fetcher,
+  )
 
   const [exportando, setExportando] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)

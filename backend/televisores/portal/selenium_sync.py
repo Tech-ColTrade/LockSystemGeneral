@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 
 from django.conf import settings
@@ -173,9 +174,107 @@ def _abrir_detalle_en_indice(driver, wait, indice, mac, res):
         return False
 
 
-def _abrir_detalle_por_mac(driver, wait, cfg, mac, res, max_paginas=20):
+def _esperar_refresco_tabla(driver, timeout=20):
+    """Espera a que una recarga de la tabla (búsqueda/paginación) termine.
+
+    Element-UI muestra `.el-loading-mask` mientras pide datos. Tras disparar la
+    acción se le da un margen breve para que la máscara APAREZCA (rompe apenas la
+    ve, normalmente en unos ms) y luego se espera a que se OCULTE. Si no aparece
+    en el margen, se asume que el refresco fue instantáneo y se sigue.
+    """
+    fin = time.time() + 2
+    while time.time() < fin:
+        if any(
+            m.is_displayed()
+            for m in driver.find_elements(By.CSS_SELECTOR, '.el-loading-mask')
+        ):
+            break
+        time.sleep(0.05)
+    _esperar_carga(driver, timeout)
+
+
+def _seleccionar_campo_busqueda(driver, wait, campo, res):
+    """Fija el <el-select> de la búsqueda en `campo` (p.ej. 'MAC Address').
+
+    Si ya está en ese valor no hace nada: en un lote reutilizamos la misma
+    sesión, así que solo se toca la primera vez.
+    """
+    contenedor = driver.find_element(
+        By.CSS_SELECTOR, 'form.searchList .search-select .el-select'
+    )
+    actual = (
+        contenedor.find_element(By.CSS_SELECTOR, 'input').get_attribute('value') or ''
+    ).strip()
+    if actual == campo:
+        return
+
+    contenedor.click()
+    # El dropdown visible (no el que queda con display:none) contiene las opciones.
+    xpath_item = (
+        "//div[contains(@class,'el-select-dropdown') and "
+        "not(contains(@style,'display: none'))]"
+        f"//li[contains(@class,'el-select-dropdown__item')][normalize-space(.)='{campo}']"
+    )
+    opcion = WebDriverWait(driver, 10).until(
+        EC.element_to_be_clickable((By.XPATH, xpath_item))
+    )
+    _click(driver, opcion)
+    res.paso(f'Campo de búsqueda fijado en "{campo}".')
+
+
+def _buscar_por_mac(driver, wait, cfg, mac, res):
+    """Usa el BUSCADOR del portal (campo 'MAC Address') para filtrar la tabla a
+    ese equipo, en vez de recorrer página por página.
+
+    Devuelve True si tras buscar aparece la fila del MAC y abre su Detail; False
+    si el buscador no devuelve ese MAC (equipo inexistente en el portal). Lanza
+    excepción solo si el buscador no está disponible (cambio de UI), para que el
+    llamador caiga al respaldo paginado.
+    """
     if 'deviceList' not in driver.current_url:
         driver.get(cfg['DEVICE_LIST_URL'])
+    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'form.searchList')))
+    _esperar_carga(driver)
+
+    # 1) Campo de búsqueda = MAC Address (idempotente entre TVs del lote).
+    _seleccionar_campo_busqueda(driver, wait, 'MAC Address', res)
+
+    # 2) Escribe el MAC limpiando lo que hubiera de una búsqueda previa.
+    mac_norm = mac.strip().upper()
+    inp = driver.find_element(
+        By.CSS_SELECTOR, 'form.searchList .search-input input.el-input__inner'
+    )
+    inp.clear()
+    inp.send_keys(Keys.CONTROL, 'a')
+    inp.send_keys(Keys.DELETE)
+    inp.send_keys(mac_norm)
+
+    # 3) Dispara la búsqueda y espera a que la tabla refresque.
+    boton = driver.find_element(
+        By.CSS_SELECTOR, 'form.searchList .search-btn button.el-button--primary'
+    )
+    _click(driver, boton)
+    _esperar_refresco_tabla(driver)
+
+    # 4) Lee el resultado. Aunque el filtro sea exacto, se verifica la fila por si
+    #    el portal hiciera coincidencia parcial: solo se abre la que calza.
+    macs = _macs_visibles(driver)
+    res.paso(f'Búsqueda de {mac}: {len(macs)} resultado(s).')
+    for i, m in enumerate(macs):
+        if mac_norm in m:
+            res.paso(f'MAC {mac} encontrado por buscador (fila {i + 1}).')
+            return _abrir_detalle_en_indice(driver, wait, i, mac, res)
+
+    return False
+
+
+def _abrir_detalle_por_mac_paginando(driver, wait, cfg, mac, res, max_paginas=20):
+    """Respaldo histórico: recorre la lista página por página buscando el MAC.
+
+    Solo se usa si el buscador falla o no confirma el equipo. Siempre recarga la
+    lista completa para deshacer cualquier filtro dejado por una búsqueda previa.
+    """
+    driver.get(cfg['DEVICE_LIST_URL'])
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '.el-table__row')))
 
     mac_norm = mac.strip().upper()
@@ -200,6 +299,26 @@ def _abrir_detalle_por_mac(driver, wait, cfg, mac, res, max_paginas=20):
 
     res.paso(f'MAC {mac} NO encontrado (revisé hasta {pagina} páginas).')
     return False
+
+
+def _abrir_detalle_por_mac(driver, wait, cfg, mac, res, max_paginas=20):
+    """Localiza el MAC y abre su Detail.
+
+    Primero intenta el BUSCADOR del portal (rápido y de costo constante). Solo si
+    el buscador no está disponible (cambio de UI → excepción) o no confirma el
+    equipo, cae al recorrido paginado. Así el camino normal es veloz y, ante
+    cualquier duda, se conserva la robustez de revisar página por página: nunca
+    se marca un equipo como "no encontrado" sin haberlo confirmado.
+    """
+    try:
+        if _buscar_por_mac(driver, wait, cfg, mac, res):
+            return True
+        res.paso('Sin resultado por buscador; confirmo con paginación.')
+    except Exception as e:  # noqa: BLE001
+        res.paso(
+            f'Buscador no disponible ({type(e).__name__}); uso paginación. {e}'
+        )
+    return _abrir_detalle_por_mac_paginando(driver, wait, cfg, mac, res, max_paginas)
 
 
 def _leer_estado_remoto(driver, res):

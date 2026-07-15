@@ -17,8 +17,9 @@ import {
   Upload,
 } from 'lucide-react'
 import { televisoresApi } from '@/features/televisores/api/televisores.api'
+import { useTelevisores } from '@/features/televisores/api/televisores.queries'
 import { usePermissions } from '@/features/auth/usePermissions'
-import type { BulkSyncStatus, Televisor } from '@/features/televisores/types'
+import type { BulkSyncStatus } from '@/features/televisores/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -60,12 +61,9 @@ function EstadoBadge({ inhabilitado }: { inhabilitado: boolean }) {
 
 export function TelevisoresPage() {
   const { canOperate } = usePermissions()
-  const [items, setItems] = useState<Televisor[]>([])
-  const [count, setCount] = useState(0)
   const [page, setPage] = useState(1)
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [valJob, setValJob] = useState<BulkSyncStatus | null>(null)
   const [validando, setValidando] = useState(false)
@@ -73,29 +71,24 @@ export function TelevisoresPage() {
   const [exportandoVal, setExportandoVal] = useState(false)
   const valPollRef = useRef<number | null>(null)
 
+  // Lista cacheada: navegar entre páginas ya vistas es instantáneo y se
+  // revalida en segundo plano. La página anterior se conserva mientras carga la
+  // siguiente (keepPreviousData), así la tabla no parpadea a vacío.
+  const {
+    data,
+    isPending,
+    isFetching,
+    isError,
+    error: listError,
+  } = useTelevisores(search, page)
+  const items = data?.results ?? []
+  const count = data?.count ?? 0
+
   useEffect(() => {
     return () => {
       if (valPollRef.current) window.clearInterval(valPollRef.current)
     }
   }, [])
-
-  useEffect(() => {
-    let active = true
-    setLoading(true)
-    setError(null)
-    televisoresApi
-      .list(search, page)
-      .then((data) => {
-        if (!active) return
-        setItems(data.results)
-        setCount(data.count)
-      })
-      .catch((e) => active && setError((e as Error).message))
-      .finally(() => active && setLoading(false))
-    return () => {
-      active = false
-    }
-  }, [search, page])
 
   function onSearch(e: React.FormEvent) {
     e.preventDefault()
@@ -160,6 +153,13 @@ export function TelevisoresPage() {
 
   const totalPages = Math.max(1, Math.ceil(count / PAGE_SIZE))
 
+  // Esqueletos solo en la PRIMERA carga (sin datos aún). Al paginar/buscar,
+  // `isFetching` atenúa las filas anteriores hasta que llega la nueva página.
+  const showSkeleton = isPending
+  const refreshing = isFetching && !isPending
+  // Un error de acción (validación) o, en su defecto, el de la lista.
+  const displayError = error ?? (isError ? (listError as Error).message : null)
+
   return (
     <div className="mx-auto max-w-6xl">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
@@ -206,16 +206,21 @@ export function TelevisoresPage() {
         </Button>
       </form>
 
-      {error && (
+      {displayError && (
         <Alert variant="destructive" className="mb-4">
           <CircleAlert />
           <AlertTitle>Ocurrió un problema</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{displayError}</AlertDescription>
         </Alert>
       )}
 
       <Card className="gap-0 overflow-hidden p-0">
-        <Table>
+        <Table
+          aria-busy={refreshing}
+          className={
+            refreshing ? 'opacity-60 transition-opacity duration-200' : undefined
+          }
+        >
           <TableHeader>
             <TableRow>
               <TableHead>Número de serial</TableHead>
@@ -226,7 +231,7 @@ export function TelevisoresPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {loading ? (
+            {showSkeleton ? (
               Array.from({ length: 6 }).map((_, i) => (
                 <TableRow key={i}>
                   {Array.from({ length: 5 }).map((__, j) => (

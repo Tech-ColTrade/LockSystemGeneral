@@ -1,13 +1,20 @@
-// Gestión de empresas (tenants). Vive en Configuración y solo la ve el
-// administrador general: es el único que puede dar de alta una empresa.
+// Gestión de empresas (tenants). Página propia, solo para el administrador
+// general: es el único que puede dar de alta una empresa y sus claves de
+// integración.
 //
 // No hay borrado: una empresa con usuarios o televisores no se puede eliminar
 // (el backend responde 409). Se desactiva, lo que corta el acceso de su gente
 // sin destruir el histórico.
 
-import { useEffect, useState } from 'react'
-import { Building2, CircleAlert, Loader2, Plus } from 'lucide-react'
-import { empresasApi, type Empresa } from '@/features/empresas/api/empresas.api'
+import { useState } from 'react'
+import { Building2, CircleAlert, KeyRound, Loader2, Plus } from 'lucide-react'
+import { type Empresa } from '@/features/empresas/api/empresas.api'
+import {
+  useActualizarEmpresa,
+  useCrearEmpresa,
+  useEmpresas,
+} from '@/features/empresas/api/empresas.queries'
+import { ApiKeysDialog } from '@/features/empresas/components/ApiKeysDialog'
 import { ApiError } from '@/lib/http/errors'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -36,54 +43,45 @@ function mensajeDeError(err: unknown): string {
 }
 
 export function EmpresasPanel() {
-  const [empresas, setEmpresas] = useState<Empresa[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const empresasQuery = useEmpresas()
+  const crearEmpresa = useCrearEmpresa()
+  const actualizarEmpresa = useActualizarEmpresa()
+
+  const empresas = empresasQuery.data?.results ?? []
+  const loading = empresasQuery.isPending
+  const creando = crearEmpresa.isPending
 
   const [nombre, setNombre] = useState('')
   const [nit, setNit] = useState('')
-  const [creando, setCreando] = useState(false)
+  // Errores de acción (crear/alternar); el de carga sale de la query.
+  const [actionError, setActionError] = useState<string | null>(null)
+  const error =
+    actionError ??
+    (empresasQuery.isError ? mensajeDeError(empresasQuery.error) : null)
 
-  useEffect(() => {
-    let activo = true
-    empresasApi
-      .list()
-      .then((r) => activo && setEmpresas(r.results))
-      .catch((e) => activo && setError(mensajeDeError(e)))
-      .finally(() => activo && setLoading(false))
-    return () => {
-      activo = false
-    }
-  }, [])
+  // Empresa cuya gestión de claves está abierta (null = diálogo cerrado).
+  const [empresaClaves, setEmpresaClaves] = useState<Empresa | null>(null)
 
   async function crear(e: React.FormEvent) {
     e.preventDefault()
-    setCreando(true)
-    setError(null)
+    setActionError(null)
     try {
-      const nueva = await empresasApi.create({ nombre, nit })
-      setEmpresas((prev) => [...prev, nueva].sort((a, b) => a.nombre.localeCompare(b.nombre)))
+      // La invalidación de la mutación refresca la lista (backend ordena por nombre).
+      await crearEmpresa.mutateAsync({ nombre, nit })
       setNombre('')
       setNit('')
     } catch (err) {
-      setError(mensajeDeError(err))
-    } finally {
-      setCreando(false)
+      setActionError(mensajeDeError(err))
     }
   }
 
   async function alternarActiva(empresa: Empresa, activa: boolean) {
-    // Optimista: el switch responde al instante y se revierte si el backend falla.
-    setEmpresas((prev) =>
-      prev.map((e) => (e.id === empresa.id ? { ...e, activa } : e)),
-    )
+    // El switch responde al instante (optimista en el hook) y se revierte si falla.
+    setActionError(null)
     try {
-      await empresasApi.update(empresa.id, { activa })
+      await actualizarEmpresa.mutateAsync({ id: empresa.id, data: { activa } })
     } catch (err) {
-      setEmpresas((prev) =>
-        prev.map((e) => (e.id === empresa.id ? { ...e, activa: !activa } : e)),
-      )
-      setError(mensajeDeError(err))
+      setActionError(mensajeDeError(err))
     }
   }
 
@@ -141,6 +139,7 @@ export function EmpresasPanel() {
                 <TableHead>NIT</TableHead>
                 <TableHead className="text-right">Usuarios</TableHead>
                 <TableHead className="text-right">Televisores</TableHead>
+                <TableHead className="text-right">Integración</TableHead>
                 <TableHead className="text-right">Activa</TableHead>
               </TableRow>
             </TableHeader>
@@ -166,6 +165,15 @@ export function EmpresasPanel() {
                     {empresa.televisores}
                   </TableCell>
                   <TableCell className="text-right">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setEmpresaClaves(empresa)}
+                    >
+                      <KeyRound /> Claves
+                    </Button>
+                  </TableCell>
+                  <TableCell className="text-right">
                     <Switch
                       checked={empresa.activa}
                       onCheckedChange={(v) => alternarActiva(empresa, v)}
@@ -183,6 +191,8 @@ export function EmpresasPanel() {
           inmediato. Sus datos se conservan.
         </p>
       </CardContent>
+
+      <ApiKeysDialog empresa={empresaClaves} onClose={() => setEmpresaClaves(null)} />
     </Card>
   )
 }

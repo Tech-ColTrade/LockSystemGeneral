@@ -44,7 +44,10 @@ export function TelevisorPincodesUsadosPage() {
     (page: number) => televisoresApi.pincodesUsadosDeTV(id!, page),
     [id],
   )
-  const { items, count, page, setPage, loading, error } = usePaginatedList(fetcher)
+  const { items, count, page, setPage, loading, error } = usePaginatedList(
+    ['tv-pincodes-usados', id],
+    fetcher,
+  )
 
   const [exportando, setExportando] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
